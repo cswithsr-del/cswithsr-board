@@ -9,7 +9,7 @@ import { notesPdf } from './export.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-let cfg = { style: 'dark', finger: false, level: 'ol', last: null };
+let cfg = { pageBg: '#0f0f13', pagePat: 'lined', finger: false, level: 'ol', last: null };
 let topic = null;
 
 /* ---------- toast ---------- */
@@ -152,6 +152,8 @@ const IC = {
   cam: '<rect x="2.5" y="6.5" width="13" height="11" rx="2.5"/><path d="M15.5 10.5l6-3.5v10l-6-3.5"/>',
   rec: '<circle cx="12" cy="12" r="7"/>', stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>',
   pause: '<path d="M9 5v14M15 5v14"/>',
+  lasso: '<path d="M12 4c5 0 9 2.6 9 6s-4 6-9 6c-1.4 0-2.7-.2-3.8-.5"/><path d="M5.2 13.8C3.8 12.8 3 11.5 3 10c0-3.4 4-6 9-6" stroke-dasharray="2.5 2.5"/><path d="M6 15c-1.5 1-1.8 2.8-.5 3.8 1 .8 2.5.4 3-1"/>',
+  shape: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16.5" cy="7.5" r="4.5"/>',
   pen: '<path d="M4 20l4.5-1L19 8.5 15.5 5 5 15.5 4 20z"/><path d="M13.5 7l3.5 3.5"/>',
   hl: '<path d="M14.5 4.5l5 5-7.5 7.5h-5v-5z"/><path d="M7 17l-3 3h6"/>',
   erase: '<path d="M8 20h12"/><path d="M4.5 15.5l9-9 6 6-7.5 7.5H8.5z"/><path d="M9 11l6 6"/>',
@@ -180,17 +182,19 @@ const recTime = document.createElement('span'); recTime.className = 'rectime'; r
 const meter = document.createElement('span'); meter.className = 'meter'; meter.innerHTML = '<b></b>'; meter.hidden = true; L.appendChild(meter);
 const shareB = btn(L, svg('cloud'), 'Send this class to Drive', openShare);
 hr(L);
-COLORS.forEach((c, i) => colorBtns.push(btn(L, `<span class="sw" style="background:${c}"></span>`, CNAMES[i] + ' ink', () => { board.tool.c = c; if (board.tool.t === 'erase' || board.tool.t === 'laser') board.tool.t = 'pen'; paint(); })));
+COLORS.forEach((c, i) => colorBtns.push(btn(L, `<span class="sw" style="background:${c}"></span>`, CNAMES[i] + ' ink', () => {
+  if (board.hasSel()) { board.selRecolor(c); return; }
+  board.tool.c = c; if (['erase', 'laser', 'lasso'].includes(board.tool.t)) board.tool.t = 'pen'; paint(); })));
 hr(L);
 board.SIZES.forEach((s, i) => sizeBtns.push(btn(L, `<span class="dot" style="width:${5 + i * 4}px;height:${5 + i * 4}px"></span>`, ['Fine', 'Medium', 'Bold'][i] + ' line', () => { board.tool.sz = i; paint(); })));
-[['pen', 'Pen'], ['hl', 'Highlighter'], ['erase', 'Eraser'], ['laser', 'Laser pointer']].forEach(([k, l]) => toolBtns[k] = btn(R, svg(k), l, () => { board.tool.t = k; paint(); }));
+[['pen', 'Pen'], ['hl', 'Highlighter'], ['shape', 'Shapes'], ['lasso', 'Select and move'], ['erase', 'Eraser'], ['laser', 'Laser pointer']].forEach(([k, l]) => toolBtns[k] = btn(R, svg(k), l, () => {
+  if (k === 'shape' && board.tool.t === 'shape') return openShapePop(toolBtns.shape);
+  board.tool.t = k; if (k !== 'lasso') board.clearSel(); paint(); if (k === 'shape') openShapePop(toolBtns.shape); }));
 hr(R);
 btn(R, svg('undo'), 'Undo', board.doUndo); btn(R, svg('redo'), 'Redo', board.doRedo);
 hr(R);
-const addBtn = btn(R, svg('page'), 'Add page', () => openPop(addBtn));
+const addBtn = btn(R, svg('page'), 'Pages', () => openPop(addBtn));
 btn(R, svg('pdf'), 'Open a PDF', () => $('#file').click());
-btn(R, svg('fit'), 'Fit page width', board.fit);
-btn(R, svg('clear'), 'Clear this page', () => { if (board.clearPage()) toast('Page cleared. Undo brings it back.'); });
 hr(R);
 btn(R, svg('full'), 'Full screen', () => { const d = document; (d.fullscreenElement ? d.exitFullscreen() : d.documentElement.requestFullscreen({ navigationUI: 'hide' })).catch(() => toast('Full screen is not available here.')); });
 btn(R, svg('set'), 'Settings and help', openSettings);
@@ -199,19 +203,62 @@ $('#show').onclick = () => document.body.classList.remove('hidden-ui');
 function paint() {
   const t = board.tool;
   colorBtns.forEach((b, i) => b.classList.toggle('on', COLORS[i] === t.c)); sizeBtns.forEach((b, i) => b.classList.toggle('on', i === t.sz));
-  Object.entries(toolBtns).forEach(([k, b]) => b.classList.toggle('on', k === t.t)); store.put('kv', 'tool', { ...t }).catch(() => {});
+  Object.entries(toolBtns).forEach(([k, b]) => b.classList.toggle('on', k === t.t)); toolBtns.pen.classList.toggle('auto', !!t.auto); store.put('kv', 'tool', { ...t }).catch(() => {});
 }
 $('#file').addEventListener('change', e => { const f = e.target.files[0]; if (f) board.importPdf(f); e.target.value = ''; });
 let pop = null;
 function closePop() { if (pop) { pop.remove(); pop = null; } }
-function openPop(anchor) {
-  closePop(); pop = document.createElement('div'); pop.className = 'pop';
-  [['dark', 'Dark lined page'], ['white', 'White lined page'], ['grid', 'Dark grid page'], ['plain', 'Dark plain page']].forEach(([k, l]) => {
-    const b = document.createElement('button'); b.className = 'opt'; b.textContent = l; b.onclick = () => { board.addPage(k); closePop(); }; pop.appendChild(b); });
+function placePop(anchor) {
   document.body.appendChild(pop); const r = anchor.getBoundingClientRect();
   pop.style.top = Math.max(8, Math.min(r.top, innerHeight - pop.offsetHeight - 8)) + 'px'; pop.style.right = (innerWidth - r.left + 8) + 'px';
 }
-document.addEventListener('pointerdown', e => { if (pop && !pop.contains(e.target) && !addBtn.contains(e.target)) closePop(); });
+const PAGE_ICONS = { lined: '<path d="M4 8h16M4 12h16M4 16h16"/>', grid: '<path d="M4 8h16M4 12h16M4 16h16M8 4v16M12 4v16M16 4v16"/>', dots: '<circle cx="8" cy="8" r=".6"/><circle cx="12" cy="8" r=".6"/><circle cx="16" cy="8" r=".6"/><circle cx="8" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="16" cy="12" r=".6"/><circle cx="8" cy="16" r=".6"/><circle cx="12" cy="16" r=".6"/><circle cx="16" cy="16" r=".6"/>', plain: '' };
+function openPop(anchor) {
+  closePop(); pop = document.createElement('div'); pop.className = 'pop pagepop';
+  const cur = board.currentPage() || {}; const isPdf = cur.k === 'pdf';
+  const bg = isPdf ? cfg.pageBg : cur.bg, pat = isPdf ? cfg.pagePat : cur.pat;
+  pop.innerHTML = `<button class="opt primary" id="pAdd">+ Add a page after this one</button>
+    <div class="plabel">Page colour${isPdf ? ' (for new pages)' : ''}</div><div class="swrow" id="pCols"></div>
+    <div class="plabel">Page lines</div><div class="swrow" id="pPats"></div>
+    <label class="tog small"><input type="checkbox" id="pAll"> Apply to all my pages in this topic</label>
+    <div class="prow"><button class="opt" id="pFit">Fit page width</button><button class="opt" id="pClear">Clear writing on this page</button></div>
+    <div class="prow"><button class="opt danger" id="pDel">Delete this page</button>${isPdf ? '<button class="opt danger" id="pPdf">Remove this whole PDF</button>' : ''}</div>`;
+  const apply = (nb, np) => { cfg.pageBg = nb; cfg.pagePat = np; saveCfg(); if (!isPdf) board.setPageStyle({ bg: nb, pat: np }, pop.querySelector('#pAll').checked); closePop(); };
+  const cols = pop.querySelector('#pCols');
+  board.PAGE_COLORS.forEach(([c, n]) => { const b = document.createElement('button'); b.className = 'psw' + (c === bg ? ' on' : ''); b.style.background = c; b.title = n; b.setAttribute('aria-label', n + ' page'); b.onclick = () => apply(c, pat); cols.appendChild(b); });
+  const custom = document.createElement('label'); custom.className = 'psw custom'; custom.title = 'Any colour'; custom.innerHTML = '<input type="color" aria-label="Pick any page colour">+';
+  custom.querySelector('input').value = /^#[0-9a-f]{6}$/i.test(bg) ? bg : '#0f0f13'; custom.querySelector('input').onchange = e => apply(e.target.value, pat); cols.appendChild(custom);
+  const pats = pop.querySelector('#pPats');
+  board.PATTERNS.forEach(([k, n]) => { const b = document.createElement('button'); b.className = 'ppat' + (k === pat ? ' on' : ''); b.innerHTML = `<svg viewBox="0 0 24 24">${PAGE_ICONS[k]}</svg><span>${n}</span>`; b.onclick = () => apply(bg, k); pats.appendChild(b); });
+  pop.querySelector('#pAdd').onclick = () => { board.addPage(isPdf ? { bg: cfg.pageBg, pat: cfg.pagePat } : null); closePop(); };
+  pop.querySelector('#pFit').onclick = () => { board.fit(); closePop(); };
+  pop.querySelector('#pClear').onclick = () => { if (board.clearPage()) toast('Page cleared. Undo brings it back.'); closePop(); };
+  pop.querySelector('#pDel').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { board.deletePage(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to delete'; } };
+  if (isPdf) pop.querySelector('#pPdf').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { board.removePdf(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to remove the PDF'; } };
+  placePop(anchor);
+}
+const SHAPES = [['line', 'Line', '<path d="M4 20L20 4"/>'], ['arrow', 'Arrow', '<path d="M4 20L20 4M11 4h9v9"/>'], ['rect', 'Rectangle', '<rect x="3.5" y="6" width="17" height="12" rx="1"/>'], ['ellipse', 'Circle / ellipse', '<ellipse cx="12" cy="12" rx="9" ry="7"/>'], ['tri', 'Triangle', '<path d="M12 4l9 16H3z"/>']];
+function openShapePop(anchor) {
+  closePop(); pop = document.createElement('div'); pop.className = 'pop';
+  pop.innerHTML = '<div class="plabel">Draw a shape</div><div class="swrow" id="shp"></div><label class="tog small"><input type="checkbox" id="auto"> Auto-shape my pen: straightens lines and tidies circles, rectangles and triangles</label>';
+  SHAPES.forEach(([k, n, ic]) => { const b = document.createElement('button'); b.className = 'ppat' + (board.tool.shape === k ? ' on' : ''); b.innerHTML = `<svg viewBox="0 0 24 24">${ic}</svg><span>${n}</span>`; b.onclick = () => { board.tool.shape = k; board.tool.t = 'shape'; paint(); closePop(); }; pop.querySelector('#shp').appendChild(b); });
+  const au = pop.querySelector('#auto'); au.checked = !!board.tool.auto; au.onchange = () => { board.tool.auto = au.checked; paint(); toast(au.checked ? 'Auto-shape is on for the pen' : 'Auto-shape is off'); };
+  placePop(anchor);
+}
+document.addEventListener('pointerdown', e => { if (pop && !pop.contains(e.target) && !addBtn.contains(e.target) && !toolBtns.shape.contains(e.target)) closePop(); });
+/* selection toolbar */
+const selBar = document.createElement('div'); selBar.className = 'selbar'; selBar.hidden = true;
+selBar.innerHTML = '<span id="selN"></span><button id="selDup">Duplicate</button><button id="selDel" class="danger">Delete</button><button id="selDone">Done</button>';
+document.body.appendChild(selBar);
+selBar.querySelector('#selDup').onclick = () => board.selDuplicate();
+selBar.querySelector('#selDel').onclick = () => board.selDelete();
+selBar.querySelector('#selDone').onclick = () => board.clearSel();
+function onSelection(r) {
+  if (!r) { selBar.hidden = true; return; }
+  selBar.hidden = false; selBar.querySelector('#selN').textContent = r.count + ' selected · tap a colour to recolour';
+  const w = selBar.offsetWidth, h = selBar.offsetHeight; let top = r.top - h - 10; if (top < 8) top = Math.min(innerHeight - h - 8, r.bottom + 10);
+  selBar.style.left = Math.max(8, Math.min(innerWidth - w - 8, (r.left + r.right) / 2 - w / 2)) + 'px'; selBar.style.top = top + 'px';
+}
 
 /* ---------- recording ---------- */
 async function toggleRec() {
@@ -240,7 +287,7 @@ async function openSettings() {
   const w = document.createElement('div'); w.className = 'modalWrap';
   w.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="st">
    <h2 id="st">Settings</h2>
-   <label for="sStyle">Style of new pages<select id="sStyle"><option value="dark">Dark lined</option><option value="white">White lined</option><option value="grid">Dark grid</option><option value="plain">Dark plain</option></select></label>
+   <label for="sCamSize">Camera window size<select id="sCamSize"><option value=".14">Small</option><option value=".19">Medium</option><option value=".26">Large</option><option value=".34">Extra large</option></select></label>
    <label for="sShape">Camera window shape<select id="sShape"><option value="rounded">Rounded rectangle</option><option value="circle">Circle</option></select></label>
    <label class="tog" for="sMirror"><input type="checkbox" id="sMirror"> Mirror my camera</label>
    <label class="tog" for="sFinger"><input type="checkbox" id="sFinger"> Let my finger write too (off means a finger only scrolls)</label>
@@ -250,13 +297,14 @@ async function openSettings() {
    <div class="row"><button id="dConn" class="primary">Connect Drive</button><span id="dStat" style="font-size:13px;color:var(--muted)"></span></div>
    <p class="help"><b>Teaching on Zoom:</b> open a topic here, then in Zoom tap Share › Screen. Keep Zoom's own camera off and use this camera button instead.<br>
    <b>Camera window:</b> drag it to move it, drag its corner to resize it, double-tap it to switch between a rectangle and a circle.<br>
-   <b>S Pen:</b> hold the side button to erase. One finger scrolls, two fingers zoom.<br>
+   <b>S Pen:</b> hold the side button while writing to erase. One finger scrolls, two fingers zoom. Pull up past the last page to add a new one.<br>
+   <b>Pen button test:</b> hold the side button and touch the board. <span id="penInfo">${esc(board.lastPen || 'Nothing yet')}</span>. If the button opens Samsung's Air command menu instead, turn off <i>Settings › Advanced features › S Pen › Air command</i> or its "pen button" option.<br>
    <b>Recording</b> saves on this tablet even without internet.${est ? ` Space used: ${fmtSize(est.usage || 0)} of ${fmtSize(est.quota || 0)}.` : ''}</p>
    <div class="row"><button class="primary" id="sDone">Done</button></div></div>`;
   document.body.appendChild(w);
   const q = s => w.querySelector(s);
-  q('#sStyle').value = cfg.style; q('#sShape').value = cam.state.shape; q('#sMirror').checked = cam.state.mirror; q('#sFinger').checked = cfg.finger;
-  const close = () => { cfg.style = q('#sStyle').value; cfg.finger = q('#sFinger').checked; cam.setShape(q('#sShape').value); cam.setMirror(q('#sMirror').checked); saveCfg(); w.remove(); };
+  q('#sCamSize').value = ['.14', '.19', '.26', '.34'].reduce((a, v) => Math.abs(v - cam.state.w) < Math.abs(a - cam.state.w) ? v : a, '.19'); q('#sShape').value = cam.state.shape; q('#sMirror').checked = cam.state.mirror; q('#sFinger').checked = cfg.finger;
+  const close = () => { cam.setSize(+q('#sCamSize').value); cfg.finger = q('#sFinger').checked; cam.setShape(q('#sShape').value); cam.setMirror(q('#sMirror').checked); saveCfg(); w.remove(); };
   const ds = drive.settings(); q('#dClient').value = ds.clientId; q('#dRoot').value = ds.root;
   const dstat = () => { const d = drive.settings(); q('#dStat').textContent = d.email ? 'Connected as ' + d.email : (d.clientId ? 'Not connected yet' : 'Paste your Client ID, then tap Connect'); q('#dConn').textContent = d.email ? 'Reconnect' : 'Connect Drive'; };
   dstat();
@@ -280,7 +328,7 @@ document.addEventListener('keydown', e => {
 (async () => {
   Object.assign(cfg, (await store.get('kv', 'cfg').catch(() => null)) || {});
   Object.assign(board.tool, (await store.get('kv', 'tool').catch(() => null)) || {});
-  board.init({ el: $('#board'), canvas: $('#ink'), toast, style: () => cfg.style, finger: () => cfg.finger, closePop,
+  board.init({ el: $('#board'), canvas: $('#ink'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: onSelection, penInfo: t => { const el = document.getElementById('penInfo'); if (el) el.textContent = t; }, finger: () => cfg.finger, closePop,
     hint: v => { $('#hint').style.opacity = v ? 1 : 0; }, page: (c, n) => { $('#pg').textContent = c + ' / ' + n; } });
   bg.init($('#bg'), () => $('#lib').hidden ? $('#win').getBoundingClientRect() : null);
   await cam.init({ el: $('#cam'), toast });

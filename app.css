@@ -57,8 +57,7 @@ footer{grid-column:2;grid-row:3;display:flex;align-items:center;justify-content:
 #cam{position:fixed;z-index:4;border-radius:18px;overflow:hidden;background:#000;box-shadow:0 0 0 3px var(--acc),0 0 30px rgba(242,181,58,.45),0 18px 40px rgba(0,0,0,.55);touch-action:none;cursor:grab}
 #cam.circle{border-radius:50%}
 #cam video{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
-#cam .grip{position:absolute;right:4px;bottom:4px;width:26px;height:26px;border-radius:50%;background:rgba(7,3,33,.55);border:2px solid var(--acc);opacity:.0;transition:opacity .2s}
-#cam:hover .grip,#cam:active .grip{opacity:.9}
+#cam .grip{position:absolute;right:0;bottom:0;width:34px;height:34px;border-radius:12px 0 16px 0;background:linear-gradient(135deg,transparent 45%,rgba(242,181,58,.95) 46%);opacity:.85}
 #cam.circle .grip{right:12%;bottom:12%}
 
 /* popovers and dialogs */
@@ -135,3 +134,22 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .thumb .tw{position:absolute;right:6px;bottom:6px;font:700 9px var(--mono);background:#7CF29A;color:#07021f;padding:2px 5px;border-radius:5px;letter-spacing:.3px}
 .prog{height:4px;border-radius:2px;background:rgba(255,255,255,.08);margin-top:6px;overflow:hidden}
 .prog b{display:block;height:100%;background:var(--cy)}
+
+/* v3 */
+.rail button.auto{position:relative}
+.rail button.auto::after{content:"";position:absolute;right:5px;top:5px;width:7px;height:7px;border-radius:50%;background:#7CF29A}
+.pop{max-width:min(420px,calc(100vw - 16px))}
+.pagepop{width:380px}
+.plabel{font:700 11px var(--mono);letter-spacing:1.5px;color:var(--cy);text-transform:uppercase;margin-top:4px}
+.swrow{display:flex;flex-wrap:wrap;gap:8px}
+.psw{width:34px;height:34px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;padding:0;position:relative;display:grid;place-items:center;color:var(--ink);font:700 18px var(--display);background:conic-gradient(#f2b53a,#5ce1ff,#7a5cff,#ff5f57,#f2b53a)}
+.psw.on{border-color:var(--acc);box-shadow:0 0 0 3px rgba(242,181,58,.35)}
+.psw.custom input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
+.ppat{display:flex;flex-direction:column;align-items:center;gap:3px;width:70px;padding:8px 4px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--ink);font:600 11px var(--display);cursor:pointer}
+.ppat svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round}
+.ppat.on{border-color:var(--acc);color:var(--acc);background:rgba(242,181,58,.12)}
+.prow{display:flex;gap:6px;flex-wrap:wrap}
+.tog.small{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--ink)}
+.selbar{position:fixed;z-index:15;display:flex;gap:6px;align-items:center;background:#120d36;border:1px solid var(--cy);border-radius:12px;padding:6px 8px;box-shadow:0 12px 30px rgba(0,0,0,.5)}
+.selbar span{font:600 12px var(--display);color:var(--muted);padding:0 4px}
+.selbar button{font:600 13px var(--display);color:var(--ink);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}

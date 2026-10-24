@@ -10,23 +10,33 @@ export async function init(o) {
   Object.assign(state, (await store.get('kv', 'cam')) || {}, { on: false });
   place();
   addEventListener('resize', place);
-  let drag = null, lastTap = 0;
+  // one finger/pen drags, the corner handle or two fingers resize, double-tap switches shape
+  const pts = new Map(); let drag = null, lastTap = 0;
   el.addEventListener('pointerdown', e => {
-    e.preventDefault(); el.setPointerCapture(e.pointerId);
-    const r = el.getBoundingClientRect(), resize = e.target.classList.contains('grip');
+    e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch (_) {} pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const r = el.getBoundingClientRect();
+    if (pts.size === 2) { const [p1, p2] = [...pts.values()]; drag = { pinch: true, d0: Math.hypot(p1.x - p2.x, p1.y - p2.y) || 1, w0: state.w, cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; return; }
+    const resize = e.target.classList.contains('grip');
     drag = { id: e.pointerId, resize, x: e.clientX, y: e.clientY, l: r.left, t: r.top, w: r.width };
     const now = performance.now(); if (!resize && now - lastTap < 320) { state.shape = state.shape === 'circle' ? 'rounded' : 'circle'; place(); save(); } lastTap = now;
   });
   el.addEventListener('pointermove', e => {
-    if (!drag || e.pointerId !== drag.id) return;
+    if (!pts.has(e.pointerId) || !drag) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (drag.pinch) {
+      if (pts.size < 2) return; const [p1, p2] = [...pts.values()]; const d = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+      state.w = Math.min(.5, Math.max(.08, drag.w0 * d / drag.d0)); const w = state.w * innerWidth, h = state.shape === 'circle' ? w : w * 3 / 4;
+      state.x = (drag.cx - w / 2) / innerWidth; state.y = (drag.cy - h / 2) / innerHeight; place(); return;
+    }
+    if (e.pointerId !== drag.id) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    if (drag.resize) state.w = Math.min(.5, Math.max(.1, (drag.w + dx) / innerWidth));
+    if (drag.resize) state.w = Math.min(.5, Math.max(.08, (drag.w + dx) / innerWidth));
     else { state.x = (drag.l + dx) / innerWidth; state.y = (drag.t + dy) / innerHeight; }
     place();
   });
-  const end = e => { if (drag && e.pointerId === drag.id) { drag = null; save(); } };
+  const end = e => { pts.delete(e.pointerId); if (!pts.size && drag) { drag = null; save(); } else if (drag && drag.pinch && pts.size < 2) { drag = null; save(); } };
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
 }
+export function setSize(w) { state.w = w; place(); save(); }
 function save() { store.put('kv', 'cam', { x: state.x, y: state.y, w: state.w, shape: state.shape, mirror: state.mirror }).catch(() => {}); }
 export function setShape(s) { state.shape = s; place(); save(); }
 export function setMirror(m) { state.mirror = m; place(); save(); }
