@@ -375,9 +375,9 @@ async function openSettings() {
    <b>Recording your voice during Zoom:</b> Android gives the microphone only to Zoom during a call. Join the meeting on your phone too for sound (phone mic on, phone speaker off), and on this tablet tap Zoom's <i>Disconnect audio</i>. Then this app can record your voice.<br>
    <b>Camera window:</b> drag it to move it, drag its corner to resize it, double-tap it to switch between a rectangle and a circle.<br>
    <b>S Pen:</b> hold the side button while writing to erase. One finger scrolls, two fingers zoom. Pull up past the last page to add a new one.<br>
-   <b>Pen button test:</b> hold the side button and touch the board. <span id="penInfo">${esc(board.lastPen || 'Nothing yet')}</span>. If the button opens Samsung's Air command menu instead, turn off <i>Settings › Advanced features › S Pen › Air command</i> or its "pen button" option.<br>
+   <b>S Pen button:</b> if pressing it opens a Samsung menu or does something else, turn off <i>Air command</i> and <i>Air actions</i> in <i>Settings › Advanced features › S Pen</i>, then use the pen test below.<br>
    <b>Recording</b> saves on this tablet even without internet.${est ? ` Space used: ${fmtSize(est.usage || 0)} of ${fmtSize(est.quota || 0)}.` : ''}</p>
-   <div class="row"><button class="primary" id="sDone">Done</button></div></div>`;
+   <div class="row"><button id="sPen">Open pen button test</button><button class="primary" id="sDone">Done</button></div></div>`;
   document.body.appendChild(w);
   const q = s => w.querySelector(s);
   q('#sCamSize').value = ['.14', '.19', '.26', '.34'].reduce((a, v) => Math.abs(v - cam.state.w) < Math.abs(a - cam.state.w) ? v : a, '.19'); q('#sShape').value = cam.state.shape; q('#sMirror').checked = cam.state.mirror; q('#sFinger').checked = cfg.finger;
@@ -390,7 +390,8 @@ async function openSettings() {
   q('#dClient').addEventListener('input', showId); showId();
   const keepDrive = () => drive.saveSettings({ clientId: q('#dClient').value.trim(), root: q('#dRoot').value.trim() || 'CSwithSR Classes' });
   q('#dConn').onclick = async () => { await keepDrive(); try { await drive.signIn(true); toast('Google Drive connected'); } catch (e) { toast(e.message); } dstat(); };
-  q('#sDone').onclick = async () => { await keepDrive(); close(); }; w.addEventListener('click', e => { if (e.target === w) close(); });
+  q('#sDone').onclick = async () => { await keepDrive(); close(); };
+  q('#sPen').onclick = async () => { await keepDrive(); close(); penTest(); }; w.addEventListener('click', e => { if (e.target === w) close(); });
 }
 
 /* ---------- keep awake, keys ---------- */
@@ -525,3 +526,23 @@ function driveStatus() {
 
 const pullEl = document.createElement('div'); pullEl.className = 'pullhint'; pullEl.hidden = true; document.getElementById('board').appendChild(pullEl);
 function pullHint(v) { pullEl.hidden = !v; pullEl.textContent = v === 2 ? 'Let go to add a new page' : 'Keep pulling to add a page'; pullEl.classList.toggle('ready', v === 2); }
+
+/* pen button test: shows exactly what the S Pen sends to the app */
+function penTest() {
+  const w = document.createElement('div'); w.className = 'modalWrap';
+  w.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ptH"><h2 id="ptH">Pen button test</h2>
+    <p class="help">1. Draw a short line in the box with the pen (no button).<br>2. Now press and hold the side button and draw again, touching the box.<br>3. Hold the button and move the pen just above the box without touching.<br>Then take a screenshot of this window and send it to Claude.</p>
+    <div id="ptPad" style="height:200px;border:2px dashed var(--cy);border-radius:12px;touch-action:none;display:grid;place-items:center;color:var(--muted)">Test area</div>
+    <pre id="ptLog" style="font:12px var(--mono);background:#0b0726;border-radius:10px;padding:10px;max-height:28vh;overflow:auto;margin:0;white-space:pre-wrap"></pre>
+    <div class="row"><button class="primary" id="ptDone">Close</button></div></div>`;
+  document.body.appendChild(w);
+  const pad = w.querySelector('#ptPad'), log = w.querySelector('#ptLog'); const lines = []; let lastKey = '';
+  const add = t => { if (t === lastKey) return; lastKey = t; lines.unshift(t); lines.length = Math.min(lines.length, 40); log.textContent = lines.join('\n'); };
+  const ev = e => { const b = e.buttons, k = `${e.type} · ${e.pointerType || '-'} · button ${e.button} · buttons ${b}${e.pressure != null ? ' · pressure ' + (+e.pressure).toFixed(2) : ''}`;
+    if (e.type === 'pointermove' && e.pointerType === 'pen' && !b && !lines.length) add('hover detected (pen above screen)'); else if (e.type !== 'pointermove' || b) add(k); };
+  ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'auxclick', 'click'].forEach(t => pad.addEventListener(t, ev));
+  pad.addEventListener('contextmenu', e => { e.preventDefault(); add('contextmenu · ' + (e.pointerType || '-') + ' · button ' + e.button); });
+  const kd = e => add(`${e.type} · key "${e.key}" · code "${e.code}" · keyCode ${e.keyCode}`);
+  addEventListener('keydown', kd, true); addEventListener('keyup', kd, true);
+  w.querySelector('#ptDone').onclick = () => { removeEventListener('keydown', kd, true); removeEventListener('keyup', kd, true); w.remove(); };
+}

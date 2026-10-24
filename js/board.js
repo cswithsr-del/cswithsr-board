@@ -30,12 +30,16 @@ export const currentPage = () => pages[curPage];
 export function init(o) {
   opts = o; boardEl = o.el; cv = o.canvas; ctx = cv.getContext('2d');
   new ResizeObserver(resize).observe(boardEl);
-  cv.addEventListener('contextmenu', e => e.preventDefault());
+  // Samsung tablets report the S Pen side button in different ways: as a right/eraser button on pointer events,
+  // as a context-menu event, or as a key press. Any of them switches the pen to the eraser while the button is held.
+  cv.addEventListener('contextmenu', e => { e.preventDefault(); if (performance.now() - lastPenSeen < 1500 || e.pointerType === 'pen') { btnFlag = true; btnFrom = 'menu'; convertToErase(); } });
+  addEventListener('keydown', e => { if (isPenKey(e)) { e.preventDefault(); btnFlag = true; btnFrom = 'key'; convertToErase(); } }, true);
+  addEventListener('keyup', e => { if (isPenKey(e) && btnFrom === 'key') { btnFlag = false; endHoverErase(); } }, true);
   cv.addEventListener('pointerdown', down);
   cv.addEventListener('pointermove', move);
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   cv.addEventListener('wheel', wheel, { passive: false });
-  cv.addEventListener('pointerleave', e => { if (live && live.hover && e.pointerId === live.id) { finishErase(live); live = null; req(); } });
+  cv.addEventListener('pointerleave', e => { if (e.pointerType === 'pen' && btnFrom === 'menu') { btnFlag = false; btnFrom = ''; } if (live && live.hover && e.pointerId === live.id) { finishErase(live); live = null; req(); } });
 }
 
 const pid = () => Math.random().toString(36).slice(2, 10);
@@ -308,7 +312,11 @@ export const hasSel = () => !!sel;
 function toDoc(e) { const r = cv.getBoundingClientRect(), s = sc(); return [(e.clientX - r.left) / s + view.sx, (e.clientY - r.top) / s + view.sy]; }
 function pageAt(y) { for (let i = pages.length - 1; i >= 0; i--) if (y >= tops[i]) return y <= tops[i] + pages[i].h ? i : -1; return -1; }
 const drawsWith = e => e.pointerType === 'pen' || e.pointerType === 'mouse' || (e.pointerType === 'touch' && opts.finger());
-const penButton = e => e.pointerType === 'pen' && (e.button === 2 || e.button === 5 || (e.buttons & 2) || (e.buttons & 32));
+let btnFlag = false, btnFrom = '', lastPenSeen = -1e9;
+const isPenKey = e => performance.now() - lastPenSeen < 3000 && (/stylus|pen/i.test(e.code + e.key) || (e.key === 'Unidentified' && !e.ctrlKey && !e.altKey));
+const penButton = e => e.pointerType === 'pen' && (btnFlag || e.button === 2 || e.button === 5 || e.button === 1 || (e.buttons & 2) || (e.buttons & 4) || (e.buttons & 32));
+function convertToErase() { if (live && live.mode === 'draw') { live = { mode: 'erase', id: live.id, hits: [], snap: new Map() }; req(); } }
+function endHoverErase() { if (live && live.hover) { finishErase(live); live = null; req(); } }
 export let lastPen = '';
 function modeFor(e) {
   if (penButton(e)) return 'erase';
@@ -317,6 +325,7 @@ function modeFor(e) {
 }
 const hlColor = () => (tool.c === '#ffffff' || tool.c === '#111111') ? '#F2B53A' : tool.c;
 function down(e) {
+  if (e.pointerType === 'pen') lastPenSeen = performance.now();
   stopInertia(); opts.closePop && opts.closePop();
   if (e.pointerType === 'pen') { lastPen = `type pen · button ${e.button} · buttons ${e.buttons}`; opts.penInfo && opts.penInfo(lastPen); }
   if (drawsWith(e) && !(e.pointerType === 'touch' && pinch)) {
@@ -357,6 +366,7 @@ function finishErase(L) {
 function move(e) {
   // S Pen side button held while hovering: erase without touching the screen
   if (e.pointerType === 'pen') {
+    lastPenSeen = performance.now();
     if (!live && penButton(e)) { live = { mode: 'erase', id: e.pointerId, hits: [], snap: new Map(), hover: true }; }
     else if (live && live.hover && live.id === e.pointerId && !penButton(e)) { finishErase(live); live = null; req(); return; }
   }
@@ -408,6 +418,7 @@ function xform(x, y) {
   selBB();
 }
 function up(e) {
+  if (e.pointerType === 'pen' && btnFrom === 'menu') { btnFlag = false; btnFrom = ''; }
   if (live && e.pointerId === live.id) {
     const L = live;
     if (L.mode === 'draw' && L.st.p.length) {
