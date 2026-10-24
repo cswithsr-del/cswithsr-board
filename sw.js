@@ -1,5 +1,5 @@
 // Offline cache: every file of the app is stored on the tablet. Bump VERSION when the app changes.
-const VERSION = 'cswithsr-board-v1';
+const VERSION = 'cswithsr-board-v2';
 const FILES = [
   './',
   "app.css",
@@ -14,11 +14,14 @@ const FILES = [
   "js/bg.js",
   "js/board.js",
   "js/cam.js",
+  "js/drive.js",
+  "js/export.js",
   "js/main.js",
   "js/rec.js",
   "js/store.js",
   "js/syllabus.js",
   "manifest.webmanifest",
+  "vendor/jspdf.umd.min.js",
   "vendor/pdf.min.js",
   "vendor/pdf.worker.min.js",
 ];

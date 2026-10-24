@@ -10,6 +10,7 @@ let cv, ctx, boardEl, opts;
 let pages = [], tops = [], docH = 0, topic = null;
 const view = { z: 1, sx: 0, sy: -GAP, W: 1, H: 1, dpr: 1 };
 let live = null, laser = [], undo = [], redo = [];
+let touched = new Set();
 const touches = new Map(); let pinch = null, penDown = false, inertia = null, lastPenUp = 0;
 export let curPage = 0;
 const pdfDocs = [];
@@ -29,7 +30,9 @@ export function init(o) {
   cv.addEventListener('wheel', wheel, { passive: false });
 }
 
-function newPage(kind) { return { k: kind || opts.style(), h: A4, s: [] }; }
+const pid = () => Math.random().toString(36).slice(2, 10);
+const dayStr = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
+function newPage(kind) { return { id: pid(), k: kind || opts.style(), h: A4, s: [] }; }
 function layout() { tops = []; let y = 0; pages.forEach(p => { tops.push(y); y += p.h + GAP; }); docH = y - GAP; }
 function resize() {
   const r = boardEl.getBoundingClientRect();
@@ -45,11 +48,12 @@ function clampView() {
 
 /* ---- load / save per topic ---- */
 export async function load(t) {
-  topic = t; undo = []; redo = []; pdfDocs.length = 0; live = null;
+  topic = t; undo = []; redo = []; pdfDocs.length = 0; live = null; touched = new Set();
   const doc = await store.get('topics', t.id);
   if (doc && doc.pages && doc.pages.length) {
-    pages = doc.pages.map(p => { const q = { k: p.k, h: p.h, d: p.d, n: p.n, s: p.s || [] }; q.s.forEach(build); return q; });
+    pages = doc.pages.map(p => { const q = { id: p.id || pid(), k: p.k, h: p.h, d: p.d, n: p.n, s: p.s || [] }; q.s.forEach(build); return q; });
     view.z = 1; view.sy = doc.sy ?? -GAP;
+    if (doc.today && doc.today.day === dayStr()) touched = new Set(doc.today.ids);
   } else { pages = [newPage()]; view.z = 1; view.sy = -GAP; }
   layout(); resize();
   const n = doc ? (doc.pdfs || 0) : 0;
@@ -70,8 +74,8 @@ function saveNow() {
   if (!topic) return Promise.resolve();
   const strokes = pages.reduce((a, p) => a + p.s.length, 0);
   store.put('kv', 'm:' + topic.id, { pages: pages.length, strokes, updated: Date.now() }).catch(() => {});
-  return store.put('topics', topic.id, { id: topic.id, pdfs: pdfDocs.length, sy: view.sy, updated: Date.now(), strokes,
-    pages: pages.map(p => ({ k: p.k, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p })) })) });
+  return store.put('topics', topic.id, { id: topic.id, pdfs: pdfDocs.length, sy: view.sy, updated: Date.now(), strokes, today: { day: dayStr(), ids: [...touched] },
+    pages: pages.map(p => ({ id: p.id, k: p.k, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p })) })) });
 }
 
 /* ---- geometry ---- */
@@ -94,17 +98,17 @@ function build(st) {
 /* ---- render ---- */
 let raf = 0;
 export function req() { if (!raf) raf = requestAnimationFrame(draw); }
-function drawPageBg(p, top) {
-  const d = PAGE[p.k] || PAGE.dark; ctx.fillStyle = d.bg; ctx.fillRect(0, top, DOCW, p.h);
-  if (p.k === 'pdf') { if (p.img) ctx.drawImage(p.img, 0, top, DOCW, p.h); else queuePdf(p); return; }
+function drawPageBg(p, top, c = ctx, live = true) {
+  const d = PAGE[p.k] || PAGE.dark; c.fillStyle = d.bg; c.fillRect(0, top, DOCW, p.h);
+  if (p.k === 'pdf') { if (p.img) c.drawImage(p.img, 0, top, DOCW, p.h); else if (live) queuePdf(p); return; }
   if (d.ln) {
-    ctx.strokeStyle = d.ln; ctx.lineWidth = 1.3; ctx.beginPath(); const step = d.grid ? 40 : 46;
-    for (let y = d.grid ? step : 110; y < p.h; y += step) { ctx.moveTo(0, top + y); ctx.lineTo(DOCW, top + y); }
-    if (d.grid) for (let x = step; x < DOCW; x += step) { ctx.moveTo(x, top); ctx.lineTo(x, top + p.h); }
-    ctx.stroke();
+    c.strokeStyle = d.ln; c.lineWidth = 1.3; c.beginPath(); const step = d.grid ? 40 : 46;
+    for (let y = d.grid ? step : 110; y < p.h; y += step) { c.moveTo(0, top + y); c.lineTo(DOCW, top + y); }
+    if (d.grid) for (let x = step; x < DOCW; x += step) { c.moveTo(x, top); c.lineTo(x, top + p.h); }
+    c.stroke();
   }
 }
-function drawStroke(st) { ctx.strokeStyle = st.c; ctx.globalAlpha = st.t === 'hl' ? .38 : 1; for (const g of st.g) { ctx.lineWidth = g.w; ctx.stroke(g.p); } ctx.globalAlpha = 1; }
+function drawStroke(st, c = ctx) { c.strokeStyle = st.c; c.globalAlpha = st.t === 'hl' ? .38 : 1; for (const g of st.g) { c.lineWidth = g.w; c.stroke(g.p); } c.globalAlpha = 1; }
 function draw() {
   raf = 0; const s = sc(), k = view.dpr * s;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#1d1c22'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -163,7 +167,7 @@ export async function importPdf(file) {
     await store.put('blobs', 'pdf:' + topic.id + ':' + d, buf);
     const fresh = pages.length === 1 && pages[0].s.length === 0 && pages[0].k !== 'pdf';
     const add = [];
-    for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); add.push({ k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
+    for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); add.push({ id: pid(), k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
     let at; if (fresh) { pages = add; at = 0; } else { at = curPage + 1; pages.splice(at, 0, ...add); }
     layout(); view.sy = tops[at] - GAP; view.z = 1; clampView(); req(); save(); opts.hint(false);
     opts.toast(doc.numPages + ' pages added');
@@ -230,8 +234,8 @@ function move(e) {
 }
 function up(e) {
   if (live && e.pointerId === live.id) {
-    if (live.mode === 'draw' && live.st.p.length) { pages[live.pg].s.push(live.st); undo.push({ t: 'add', pg: live.pg, st: live.st }); redo = []; save(); }
-    if (live.mode === 'erase' && live.hits.length) { undo.push({ t: 'erase', items: live.hits }); redo = []; save(); }
+    if (live.mode === 'draw' && live.st.p.length) { touched.add(pages[live.pg].id); pages[live.pg].s.push(live.st); undo.push({ t: 'add', pg: live.pg, st: live.st }); redo = []; save(); }
+    if (live.mode === 'erase' && live.hits.length) { live.hits.forEach(h => touched.add(pages[h.pg].id)); undo.push({ t: 'erase', items: live.hits }); redo = []; save(); }
     live = null; penDown = false; lastPenUp = performance.now(); req(); return;
   }
   const t = touches.get(e.pointerId); if (!t) return; touches.delete(e.pointerId);
@@ -292,3 +296,20 @@ export function addPage(kind) { const at = curPage + 1; pages.splice(at, 0, newP
 export function clearPage() { const p = pages[curPage]; if (!p.s.length) return false; undo.push({ t: 'clear', pg: curPage, old: p.s }); p.s = []; redo = []; req(); save(); return true; }
 export function fit() { view.z = 1; clampView(); req(); }
 export function goPage(i) { if (!pages[i]) return; view.sy = tops[i] - GAP; clampView(); req(); }
+
+/* ---- export helpers ---- */
+export const topicNow = () => topic;
+export function pageInfo() { return pages.map((p, i) => ({ i, kind: p.k, strokes: p.s.length, touched: touched.has(p.id) })); }
+export async function renderPage(i, W) {
+  const p = pages[i]; const c = document.createElement('canvas'); c.width = Math.round(W); c.height = Math.round(W * p.h / DOCW);
+  const x = c.getContext('2d'); const k = W / DOCW;
+  if (p.k === 'pdf' && pdfDocs[p.d]) {
+    x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+    const pg = await pdfDocs[p.d].getPage(p.n); const v1 = pg.getViewport({ scale: 1 });
+    await pg.render({ canvasContext: x, viewport: pg.getViewport({ scale: c.width / v1.width }) }).promise;
+    x.setTransform(k, 0, 0, k, 0, 0);
+  } else { x.setTransform(k, 0, 0, k, 0, 0); drawPageBg(p, 0, x, false); }
+  x.lineCap = 'round'; x.lineJoin = 'round';
+  for (const st of p.s) drawStroke(st, x);
+  return c;
+}
