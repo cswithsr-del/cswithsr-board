@@ -377,8 +377,8 @@ async function openSettings() {
    <label for="dRoot">Main Drive folder name<input id="dRoot"></label>
    <p id="dCheck" class="help"></p>
    <div class="row"><button id="dConn" class="primary">Connect Drive</button><span id="dStat" style="font-size:13px;color:var(--muted)"></span></div>
-   <p class="help"><b>Teaching on Zoom:</b> open a topic here, then in Zoom tap Share › Screen. Keep Zoom's own camera off and use this camera button instead.<br>
-   <b>Recording your voice during Zoom:</b> Android gives the microphone only to Zoom during a call. Join the meeting on your phone too for sound (phone mic on, phone speaker off), and on this tablet tap Zoom's <i>Disconnect audio</i>. Then this app can record your voice.<br>
+   <p class="help"><b>Teaching on Zoom:</b> open a topic here, then in Google Meet tap Share screen (or Zoom: Share › Screen). Keep the meeting's own camera off and use this camera button instead.<br>
+   <b>Recording your voice:</b> use <b>Google Meet</b> for live classes. It lets this app record your voice while you share the screen. Zoom keeps the microphone to itself during a call, so with Zoom the recording is silent.<br>
    <b>Camera window:</b> drag it to move it, drag its corner to resize it, double-tap it to switch between a rectangle and a circle.<br>
    <b>S Pen:</b> hold the side button while writing to erase. One finger scrolls, two fingers zoom. Pull up past the last page to add a new one.<br>
    <b>S Pen button:</b> if pressing it opens a Samsung menu or does something else, turn off <i>Air command</i> and <i>Air actions</i> in <i>Settings › Advanced features › S Pen</i>, then use the pen test below.<br>
