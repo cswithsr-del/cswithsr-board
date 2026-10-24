@@ -47,13 +47,14 @@ export async function signIn(interactive = true) {
       client_id: cfg.clientId, scope: SCOPE + ' https://www.googleapis.com/auth/userinfo.email',
       callback: async r => {
         if (r.error) return no(new Error(r.error_description || r.error));
+        if (!google.accounts.oauth2.hasGrantedAllScopes(r, SCOPE)) { token = null; return no(new Error('Google Drive permission was not ticked. Tap Connect Drive again and tick the box that lets CSwithSR Board use its Drive files.')); }
         token = r.access_token; tokenExp = Date.now() + (r.expires_in - 120) * 1000;
         try { const u = await (await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } })).json(); if (u.email) cfg.email = u.email; await store.put('kv', 'drive', cfg); } catch (e) {}
         setState({ needsSignIn: false, msg: '' }); ok(); pump();
       },
       error_callback: e => no(new Error(e && e.type === 'popup_closed' ? 'Sign-in window was closed.' : 'Google sign-in could not open. Tap again.'))
     });
-    client.requestAccessToken({ prompt: interactive && !cfg.email ? 'consent' : '', login_hint: cfg.email || undefined });
+    client.requestAccessToken({ prompt: interactive ? 'consent' : '', login_hint: cfg.email || undefined });
   });
 }
 export async function signOut() {
@@ -98,6 +99,13 @@ async function call(url, init = {}) {
   if (r.status === 401) { const er = new Error('Signed out'); er.auth = true; throw er; }
   return r;
 }
+async function why(r, what) {
+  let msg = '', reason = '';
+  try { const j = await r.json(); msg = j.error && j.error.message || ''; reason = (j.error && j.error.errors && j.error.errors[0] && j.error.errors[0].reason) || (j.error && j.error.status) || ''; } catch (e) {}
+  if (r.status === 403 && /insufficient|scope|PERMISSION_DENIED/i.test(reason + msg) && !/has not been used|disabled/i.test(msg)) { token = null; setState({ needsSignIn: true, msg: 'Drive permission missing. Tap Connect Drive and tick the Drive box.' }); const e = new Error('Drive permission missing: tap Connect Drive and tick the Drive box, then Retry.'); throw e; }
+  if (/has not been used|is disabled|accessNotConfigured|SERVICE_DISABLED/i.test(msg + reason)) throw new Error('The Google Drive API is not switched on in your Google Cloud project. Enable it, wait 2 minutes, then Retry.');
+  throw new Error(`${what} (${r.status}${msg ? ': ' + msg.slice(0, 140) : ''})`);
+}
 async function folderFor(path) {
   const cache = (await store.get('kv', 'dfolders')) || {};
   let parent = 'root', key = '';
@@ -106,12 +114,12 @@ async function folderFor(path) {
     if (cache[key]) { parent = cache[key]; continue; }
     const q = `name='${name.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parent}' in parents and trashed=false`;
     const r = await call('https://www.googleapis.com/drive/v3/files?fields=files(id)&q=' + encodeURIComponent(q));
-    if (!r.ok) throw new Error('Drive folder lookup failed (' + r.status + ')');
+    if (!r.ok) await why(r, 'Drive folder lookup failed');
     const f = (await r.json()).files || [];
     let id = f[0] && f[0].id;
     if (!id) {
       const c = await call('https://www.googleapis.com/drive/v3/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parent] }) });
-      if (!c.ok) throw new Error('Could not create Drive folder (' + c.status + ')');
+      if (!c.ok) await why(c, 'Could not create Drive folder');
       id = (await c.json()).id;
     }
     cache[key] = parent = id; await store.put('kv', 'dfolders', cache);
@@ -133,7 +141,7 @@ async function upload(j) {
     const r = await call('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
       method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': j.mime, 'X-Upload-Content-Length': String(total) },
       body: JSON.stringify({ name: j.name, parents: [parent], mimeType: j.mime }) });
-    if (!r.ok) throw new Error('Drive refused the upload (' + r.status + ')');
+    if (!r.ok) await why(r, 'Drive refused the upload');
     j.session = r.headers.get('Location'); j.offset = 0; if (!j.session) throw new Error('Drive did not return an upload address.');
     await saveJob(j);
   }
