@@ -3,7 +3,8 @@ import * as store from './store.js';
 
 const DOCW = 1000, GAP = 28, A4 = 1414;
 export const SIZES = [2.0, 3.2, 5.6];
-export const tool = { t: 'pen', c: '#ffffff', sz: 1, shape: 'line', auto: false };
+export const tool = { t: 'pen', c: '#ffffff', sz: 1, shape: 'line', auto: false, er: 'stroke', erSz: 1 };
+export const ER_SIZES = [8, 18, 36];
 export const PAGE_COLORS = [
   ['#0f0f13', 'Board black'], ['#0b0726', 'CSwithSR navy'], ['#101a3a', 'Deep blue'], ['#12301f', 'Chalk green'],
   ['#22252c', 'Slate'], ['#ffffff', 'White'], ['#f5f1ea', 'Cream'], ['#e8f4ff', 'Sky']
@@ -16,7 +17,7 @@ let pages = [], tops = [], docH = 0, topic = null;
 const view = { z: 1, sx: 0, sy: -GAP, W: 1, H: 1, dpr: 1 };
 let live = null, laser = [], undo = [], redo = [], sel = null;
 let touched = new Set();
-const touches = new Map(); let pinch = null, penDown = false, inertia = null, lastPenUp = 0, pull = 0;
+const touches = new Map(); let pinch = null, penDown = false, inertia = null, lastPenUp = 0, pull = 0, atEnd = false; const PULL = 150;
 export let curPage = 0;
 const pdfDocs = [];
 let pdfReady = null;
@@ -34,6 +35,7 @@ export function init(o) {
   cv.addEventListener('pointermove', move);
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   cv.addEventListener('wheel', wheel, { passive: false });
+  cv.addEventListener('pointerleave', e => { if (live && live.hover && e.pointerId === live.id) { finishErase(live); live = null; req(); } });
 }
 
 const pid = () => Math.random().toString(36).slice(2, 10);
@@ -209,6 +211,7 @@ function draw() {
     ctx.save(); ctx.setLineDash([8 / s, 6 / s]); ctx.strokeStyle = '#5CE1FF'; ctx.lineWidth = 1.6 / s; ctx.beginPath();
     live.path.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke(); ctx.restore();
   }
+  if (live && live.mode === 'erase' && live.cx != null && tool.er === 'area') { ctx.save(); ctx.strokeStyle = 'rgba(92,225,255,.8)'; ctx.lineWidth = 1.5 / s; ctx.beginPath(); ctx.arc(live.cx, live.cy, ER_SIZES[tool.erSz] / Math.sqrt(view.z), 0, 7); ctx.stroke(); ctx.restore(); }
   if (sel && pages.includes(sel.page)) {
     const [a, b, c, d] = selBox(); ctx.save(); ctx.setLineDash([8 / s, 6 / s]); ctx.strokeStyle = '#5CE1FF'; ctx.lineWidth = 1.6 / s; ctx.strokeRect(a, b, c - a, d - b); ctx.setLineDash([]);
     const h = 9 / s; ctx.fillStyle = '#F2B53A'; ctx.strokeStyle = '#07021f';
@@ -321,7 +324,7 @@ function down(e) {
     try { cv.setPointerCapture(e.pointerId); } catch (_) {} penDown = true; touches.clear(); pinch = null;
     const m = modeFor(e), [x, y] = toDoc(e);
     if (m === 'laser') { live = { mode: 'laser', id: e.pointerId }; laser.push({ x, y, t: performance.now() }); req(); return; }
-    if (m === 'erase') { live = { mode: 'erase', id: e.pointerId, hits: [] }; eraseAt(x, y); return; }
+    if (m === 'erase') { live = { mode: 'erase', id: e.pointerId, hits: [], snap: new Map() }; eraseAt(x, y); return; }
     if (m === 'lasso') {
       const h = hitSel(x, y);
       if (h) { live = { mode: 'xform', id: e.pointerId, h, x0: x, y0: y, orig: sel.items.map(st => ({ st, p: st.p.slice(), w: st.w })) }; return; }
@@ -340,17 +343,26 @@ function down(e) {
   if (e.pointerType === 'touch') {
     if (penDown || performance.now() - lastPenUp < 250) return;
     if ((e.width || 0) > 45 && (e.height || 0) > 45) return;
-    touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0 }); pull = 0;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0 }); pull = 0; atEnd = view.sy >= maxSy() - 2;
     if (touches.size === 2) {
       const [a, b] = [...touches.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y) || 1; const r = cv.getBoundingClientRect();
       pinch = { d0: d, z0: view.z, dx: ((a.x + b.x) / 2 - r.left) / sc() + view.sx, dy: ((a.y + b.y) / 2 - r.top) / sc() + view.sy };
     }
   }
 }
+function finishErase(L) {
+  if (L.snap && L.snap.size) { const items = [...L.snap].map(([page, before]) => ({ page, before, after: page.s.slice() })); items.forEach(it => touched.add(it.page.id)); undo.push({ t: 'strokes', items }); redo = []; save(); }
+  else if (L.hits.length) { L.hits.forEach(h => touched.add(h.page.id)); undo.push({ t: 'erase', items: L.hits }); redo = []; save(); }
+}
 function move(e) {
+  // S Pen side button held while hovering: erase without touching the screen
+  if (e.pointerType === 'pen') {
+    if (!live && penButton(e)) { live = { mode: 'erase', id: e.pointerId, hits: [], snap: new Map(), hover: true }; }
+    else if (live && live.hover && live.id === e.pointerId && !penButton(e)) { finishErase(live); live = null; req(); return; }
+  }
   if (live && e.pointerId === live.id) {
     // pen button pressed just after touching down: switch this stroke to the eraser
-    if (live.mode === 'draw' && penButton(e) && live.st.p.length <= 30) { live = { mode: 'erase', id: e.pointerId, hits: [] }; }
+    if (live.mode === 'draw' && penButton(e) && live.st.p.length <= 30) { live = { mode: 'erase', id: e.pointerId, hits: [], snap: new Map() }; }
     const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
     for (const ev of (evs.length ? evs : [e])) {
       const [x, y] = toDoc(ev);
@@ -375,8 +387,8 @@ function move(e) {
   if (touches.size === 1 && !pinch) {
     const before = view.sy; view.sx -= dxs / sc(); view.sy -= dys / sc(); clampView(); req();
     // pulling up past the last page adds a new page (like Samsung Notes)
-    if (dys < 0 && view.sy >= maxSy() - .5 && Math.abs(view.sy - before) < 1e-3) { pull += -dys; if (pull > 160) { pull = 0; t.vx = t.vy = 0; addPageEnd(); } }
-    else if (dys > 0) pull = 0;
+    if (atEnd && view.sy >= maxSy() - .5) { pull = Math.max(0, pull - dys); opts.pullHint && opts.pullHint(pull > PULL ? 2 : pull > 30 ? 1 : 0); }
+    else { if (pull) opts.pullHint && opts.pullHint(0); pull = 0; atEnd = false; }
   } else if (touches.size >= 2 && pinch) {
     const [a, b] = [...touches.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y) || 1; const r = cv.getBoundingClientRect();
     view.z = Math.min(4, Math.max(.5, pinch.z0 * d / pinch.d0)); const s = sc();
@@ -403,13 +415,14 @@ function up(e) {
       touched.add(L.page.id); L.page.s.push(L.st); undo.push({ t: 'add', page: L.page, st: L.st }); redo = []; save();
     }
     if (L.mode === 'shape') { const [a, b, c, d] = L.st.bb; if (Math.hypot(c - a, d - b) > 4) { touched.add(L.page.id); L.page.s.push(L.st); undo.push({ t: 'add', page: L.page, st: L.st }); redo = []; save(); } }
-    if (L.mode === 'erase' && L.hits.length) { L.hits.forEach(h => touched.add(h.page.id)); undo.push({ t: 'erase', items: L.hits }); redo = []; save(); }
+    if (L.mode === 'erase') finishErase(L);
     if (L.mode === 'lasso') finishLasso(L.path, L.page);
     if (L.mode === 'xform') { undo.push({ t: 'xform', items: L.orig.map(o => ({ st: o.st, before: [o.p, o.w], after: [o.st.p, o.st.w] })) }); redo = []; touched.add(sel.page.id); save(); reportSel(); }
     live = null; penDown = false; lastPenUp = performance.now(); req(); return;
   }
   const t = touches.get(e.pointerId); if (!t) return; touches.delete(e.pointerId);
-  if (pinch && touches.size < 2) { pinch = null; if (touches.size === 1) { const o = [...touches.values()][0]; o.vx = o.vy = 0; } refreshPdfRes(); return; }
+  if (pinch && touches.size < 2) { pull = 0; opts.pullHint && opts.pullHint(0); pinch = null; if (touches.size === 1) { const o = [...touches.values()][0]; o.vx = o.vy = 0; } refreshPdfRes(); return; }
+  if (pull) { opts.pullHint && opts.pullHint(0); const add = pull > PULL && atEnd && e.type === 'pointerup'; pull = 0; atEnd = false; if (add) { addPageEnd(); return; } }
   if (touches.size === 0 && e.type === 'pointerup' && performance.now() - t.t < 80) startInertia(t.vx, t.vy);
   save();
 }
@@ -432,7 +445,10 @@ function stopInertia() { if (inertia) { cancelAnimationFrame(inertia); inertia =
 let resT = 0;
 function refreshPdfRes() { clearTimeout(resT); resT = setTimeout(() => { if (view.z > 1.3) pages.forEach(p => { if (p.k === 'pdf' && p.img && p.img.width < view.W * view.dpr * view.z * .9) p.img = null; }); req(); }, 400); }
 function eraseAt(x, y) {
-  const pg = pageAt(y); if (pg < 0) return; const page = pages[pg], ly = y - tops[pg], r = 10 / view.z, S = page.s; let hit = false;
+  const pg = pageAt(y); live.cx = x; live.cy = y; req(); if (pg < 0) return;
+  const page = pages[pg], ly = y - tops[pg], S = page.s;
+  if (tool.er === 'area') return areaErase(page, x, ly, ER_SIZES[tool.erSz] / Math.sqrt(view.z));
+  const r = 10 / view.z; let hit = false;
   for (let i = S.length - 1; i >= 0; i--) {
     const st = S[i], b = st.bb, pad = r + st.w * 1.2;
     if (x < b[0] - pad || x > b[2] + pad || ly < b[1] - pad || ly > b[3] + pad) continue;
@@ -446,6 +462,33 @@ function eraseAt(x, y) {
   }
   if (hit) req();
 }
+// Area eraser: cuts away only the part of each stroke under the eraser circle.
+function densify(P, step) {
+  const o = []; const n = P.length / 3;
+  for (let i = 0; i < n; i++) {
+    if (i) { const ax = P[i * 3 - 3], ay = P[i * 3 - 2], ap = P[i * 3 - 1], bx = P[i * 3], by = P[i * 3 + 1], bp = P[i * 3 + 2], L = Math.hypot(bx - ax, by - ay), k = Math.floor(L / step);
+      for (let j = 1; j < k; j++) { const t = j / k; o.push(ax + (bx - ax) * t, ay + (by - ay) * t, ap + (bp - ap) * t); } }
+    o.push(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]);
+  }
+  return o;
+}
+function areaErase(page, x, y, r) {
+  let changed = false; const out = [];
+  for (const st of page.s) {
+    const b = st.bb, pad = r + st.w;
+    if (x < b[0] - pad || x > b[2] + pad || y < b[1] - pad || y > b[3] + pad) { out.push(st); continue; }
+    const P = densify(st.p, Math.max(1.5, r / 3)), n = P.length / 3, keep = []; let cur = [], any = false;
+    for (let i = 0; i < n; i++) {
+      if (Math.hypot(P[i * 3] - x, P[i * 3 + 1] - y) < r + st.w / 2) { any = true; if (cur.length) { keep.push(cur); cur = []; } }
+      else cur.push(+P[i * 3].toFixed(2), +P[i * 3 + 1].toFixed(2), P[i * 3 + 2]);
+    }
+    if (cur.length) keep.push(cur);
+    if (!any) { out.push(st); continue; }
+    changed = true; if (!live.snap.has(page)) live.snap.set(page, page.s.slice());
+    for (const pts of keep) if (pts.length >= 6) { const n2 = { t: st.t, c: st.c, w: st.w, sh: st.sh, p: pts }; build(n2); out.push(n2); }
+  }
+  if (changed) { page.s = out; req(); }
+}
 
 /* ---- actions ---- */
 function apply(a, dir) {
@@ -457,6 +500,7 @@ function apply(a, dir) {
     else for (let k = a.items.length - 1; k >= 0; k--) { const h = a.items[k]; h.page.s.splice(Math.min(h.i, h.page.s.length), 0, h.st); }
   }
   else if (a.t === 'clear') a.page.s = fwd ? [] : a.old;
+  else if (a.t === 'strokes') a.items.forEach(it => it.page.s = (fwd ? it.after : it.before).slice());
   else if (a.t === 'xform') for (const it of a.items) { const [p, w] = fwd ? it.after : it.before; it.st.p = p; it.st.w = w; build(it.st); }
   else if (a.t === 'color') a.items.forEach((st, i) => st.c = fwd ? a.after[i] : a.before[i]);
   else if (a.t === 'pages') { pages = fwd ? a.after.slice() : a.before.slice(); layout(); clampView(); }
@@ -470,6 +514,13 @@ export function addPageEnd() {
   let base = null; for (let i = pages.length - 1; i >= 0; i--) if (pages[i].k !== 'pdf') { base = { bg: pages[i].bg, pat: pages[i].pat }; break; }
   pagesChange(() => pages.push(newPage(base || opts.style()))); view.sy = tops[pages.length - 1] - GAP; clampView(); req(); opts.toast('New page added');
 }
+export function deletePages(ix) {
+  const del = new Set(ix.map(i => pages[i]).filter(Boolean)); if (!del.size) return;
+  pagesChange(() => { pages = pages.filter(p => !del.has(p)); if (!pages.length) pages.push(newPage(opts.style())); });
+  opts.toast(del.size + (del.size > 1 ? ' pages deleted' : ' page deleted') + '. Undo brings them back.');
+}
+export function insertPage(at, style) { pagesChange(() => pages.splice(Math.max(0, Math.min(at, pages.length)), 0, newPage(style))); }
+export function movePage(from, to) { if (from === to || !pages[from]) return; pagesChange(() => { const [p] = pages.splice(from, 1); pages.splice(to, 0, p); }); }
 export function deletePage() {
   const p = pages[curPage]; if (!p) return;
   pagesChange(() => { pages.splice(curPage, 1); if (!pages.length) pages.push(newPage(opts.style())); });

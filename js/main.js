@@ -19,11 +19,18 @@ const saveCfg = () => store.put('kv', 'cfg', cfg).catch(() => {});
 
 /* ---------- topics ---------- */
 async function customTopics() { return (await store.get('kv', 'custom')) || []; }
+// Your own names for chapters and topics (notes stay linked to the original topic, so renaming never loses anything)
+let NAMES = { ch: {}, tp: {}, hide: [] };
+async function loadNames() { NAMES = Object.assign({ ch: {}, tp: {}, hide: [] }, (await store.get('kv', 'names')) || {}); }
+const saveNames = () => store.put('kv', 'names', NAMES);
+const chName = (lv, ch) => NAMES.ch[lv + ':' + ch.n] || ch.name;
+const tpName = (id, name) => NAMES.tp[id] || name;
+let libEdit = false;
 async function allTopics() {
   const out = []; const custom = await customTopics();
   for (const lv of LEVELS) for (const p of lv.papers) for (const ch of p.chapters) {
     const names = [...ch.topics, ...custom.filter(c => c.lv === lv.id && c.ch === ch.n).map(c => c.name)];
-    for (const name of names) out.push({ id: topicId(lv.id, name), name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterName: ch.name, paper: p.id });
+    for (const name of names) { const id = topicId(lv.id, name); if (NAMES.hide.includes(id)) continue; out.push({ id, name: tpName(id, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterName: chName(lv.id, ch), paper: p.id }); }
   }
   return out;
 }
@@ -67,7 +74,8 @@ async function renderLib() {
   tabs.innerHTML = '';
   LEVELS.forEach(lv => { const b = document.createElement('button'); b.role = 'tab'; b.textContent = lv.name; b.setAttribute('aria-selected', cfg.level === lv.id); b.onclick = () => { cfg.level = lv.id; saveCfg(); renderLib(); }; tabs.appendChild(b); });
   const q = $('#search').value.trim().toLowerCase();
-  const custom = await customTopics();
+  const custom = await customTopics(); await loadNames();
+  $('#editBtn').classList.toggle('primary', libEdit); $('#editBtn').textContent = libEdit ? 'Done editing' : 'Edit names';
   const levels = q ? LEVELS : LEVELS.filter(l => l.id === cfg.level);
   let shown = 0;
   for (const lv of levels) for (const p of lv.papers) {
@@ -75,18 +83,33 @@ async function renderLib() {
     sec.innerHTML = `<h2>${esc(q ? lv.name + ' · ' : '')}${esc(p.name)}</h2>`; const grid = document.createElement('div'); grid.className = 'chgrid'; sec.appendChild(grid);
     for (const ch of p.chapters) {
       const names = [...ch.topics, ...custom.filter(c => c.lv === lv.id && c.ch === ch.n).map(c => c.name)];
-      const match = names.filter(n => !q || n.toLowerCase().includes(q) || ch.name.toLowerCase().includes(q));
+      const cName = chName(lv.id, ch);
+      const visible = names.filter(n => !NAMES.hide.includes(topicId(lv.id, n)));
+      const match = visible.filter(n => !q || tpName(topicId(lv.id, n), n).toLowerCase().includes(q) || cName.toLowerCase().includes(q));
       if (q && !match.length) continue;
       const card = document.createElement('div'); card.className = 'ch';
-      card.innerHTML = `<h3><b>${String(ch.n).padStart(2, '0')}</b>${esc(ch.name)}</h3>`;
-      for (const name of match) {
-        const id = topicId(lv.id, name), m = metas[id], rc = recCount[id] || 0; shown++;
-        const b = document.createElement('button'); b.className = 'tp';
+      card.innerHTML = `<h3><b>${String(ch.n).padStart(2, '0')}</b><span class="cn">${esc(cName)}</span></h3>`;
+      if (libEdit) {
+        const pen = document.createElement('button'); pen.className = 'mini'; pen.textContent = 'Rename'; card.querySelector('h3').appendChild(pen);
+        pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { if (v && v !== ch.name) NAMES.ch[lv.id + ':' + ch.n] = v; else delete NAMES.ch[lv.id + ':' + ch.n]; await saveNames(); renderLib(); });
+      }
+      for (const orig of match) {
+        const id = topicId(lv.id, orig), name = tpName(id, orig), m = metas[id], rc = recCount[id] || 0; shown++;
+        const b = document.createElement(libEdit ? 'div' : 'button'); b.className = 'tp';
         const meta = [m ? m.pages + (m.pages === 1 ? ' PAGE' : ' PAGES') : '', rc ? rc + ' REC' : ''].filter(Boolean).join(' · ');
         b.innerHTML = `<span class="nm">${esc(name)}</span><span class="mt ${m && m.strokes ? 'has' : ''}">${meta || 'NEW'}</span>`;
-        b.onclick = () => openTopic({ id, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterName: ch.name, paper: p.id });
+        if (libEdit) {
+          const rn = document.createElement('button'); rn.className = 'mini'; rn.textContent = 'Rename';
+          rn.onclick = () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[id] = v; else delete NAMES.tp[id]; await saveNames(); renderLib(); });
+          const hd = document.createElement('button'); hd.className = 'mini danger'; hd.textContent = 'Hide';
+          hd.onclick = async () => { NAMES.hide.push(id); await saveNames(); toast('Topic hidden. Its notes are kept; “Show hidden” brings it back.'); renderLib(); };
+          b.append(rn, hd);
+        } else b.onclick = () => openTopic({ id, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterName: cName, paper: p.id });
         card.appendChild(b);
       }
+      const hidden = names.filter(n => NAMES.hide.includes(topicId(lv.id, n)));
+      if (libEdit && hidden.length) { const sh = document.createElement('button'); sh.className = 'addt'; sh.textContent = `Show hidden (${hidden.length})`;
+        sh.onclick = async () => { NAMES.hide = NAMES.hide.filter(x => !hidden.some(n => topicId(lv.id, n) === x)); await saveNames(); renderLib(); }; card.appendChild(sh); }
       if (!q) {
         const add = document.createElement('button'); add.className = 'addt'; add.textContent = '+ Add a topic';
         add.onclick = () => {
@@ -142,6 +165,13 @@ async function playRec(r) {
 }
 $('#search').addEventListener('input', () => { libView = 'topics'; renderLib(); });
 $('#quick').onclick = () => openTopic(QUICK);
+$('#editBtn').onclick = () => { libEdit = !libEdit; libView = 'topics'; renderLib(); };
+function inlineEdit(el, value, done) {
+  const inp = document.createElement('input'); inp.value = value; inp.className = 'inl'; inp.setAttribute('aria-label', 'New name');
+  el.replaceWith(inp); inp.focus(); inp.select(); let fin = false;
+  const go = () => { if (fin) return; fin = true; done(inp.value.trim()); };
+  inp.onkeydown = e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') { fin = true; renderLib(); } }; inp.onblur = go;
+}
 $('#recsBtn').onclick = () => { libView = libView === 'recs' ? 'topics' : 'recs'; renderLib(); };
 $('#upsBtn').onclick = () => { libView = libView === 'ups' ? 'topics' : 'ups'; renderLib(); };
 
@@ -154,6 +184,7 @@ const IC = {
   pause: '<path d="M9 5v14M15 5v14"/>',
   lasso: '<path d="M12 4c5 0 9 2.6 9 6s-4 6-9 6c-1.4 0-2.7-.2-3.8-.5"/><path d="M5.2 13.8C3.8 12.8 3 11.5 3 10c0-3.4 4-6 9-6" stroke-dasharray="2.5 2.5"/><path d="M6 15c-1.5 1-1.8 2.8-.5 3.8 1 .8 2.5.4 3-1"/>',
   shape: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16.5" cy="7.5" r="4.5"/>',
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
   pen: '<path d="M4 20l4.5-1L19 8.5 15.5 5 5 15.5 4 20z"/><path d="M13.5 7l3.5 3.5"/>',
   hl: '<path d="M14.5 4.5l5 5-7.5 7.5h-5v-5z"/><path d="M7 17l-3 3h6"/>',
   erase: '<path d="M8 20h12"/><path d="M4.5 15.5l9-9 6 6-7.5 7.5H8.5z"/><path d="M9 11l6 6"/>',
@@ -189,11 +220,13 @@ hr(L);
 board.SIZES.forEach((s, i) => sizeBtns.push(btn(L, `<span class="dot" style="width:${5 + i * 4}px;height:${5 + i * 4}px"></span>`, ['Fine', 'Medium', 'Bold'][i] + ' line', () => { board.tool.sz = i; paint(); })));
 [['pen', 'Pen'], ['hl', 'Highlighter'], ['shape', 'Shapes'], ['lasso', 'Select and move'], ['erase', 'Eraser'], ['laser', 'Laser pointer']].forEach(([k, l]) => toolBtns[k] = btn(R, svg(k), l, () => {
   if (k === 'shape' && board.tool.t === 'shape') return openShapePop(toolBtns.shape);
-  board.tool.t = k; if (k !== 'lasso') board.clearSel(); paint(); if (k === 'shape') openShapePop(toolBtns.shape); }));
+  if (k === 'erase' && board.tool.t === 'erase') return openEraserPop(toolBtns.erase);
+  board.tool.t = k; if (k !== 'lasso') board.clearSel(); paint(); if (k === 'shape') openShapePop(toolBtns.shape); if (k === 'erase') openEraserPop(toolBtns.erase); }));
 hr(R);
 btn(R, svg('undo'), 'Undo', board.doUndo); btn(R, svg('redo'), 'Redo', board.doRedo);
 hr(R);
 const addBtn = btn(R, svg('page'), 'Pages', () => openPop(addBtn));
+btn(R, svg('grid'), 'Page overview', openOverview);
 btn(R, svg('pdf'), 'Open a PDF', () => $('#file').click());
 hr(R);
 btn(R, svg('full'), 'Full screen', () => { const d = document; (d.fullscreenElement ? d.exitFullscreen() : d.documentElement.requestFullscreen({ navigationUI: 'hide' })).catch(() => toast('Full screen is not available here.')); });
@@ -245,7 +278,49 @@ function openShapePop(anchor) {
   const au = pop.querySelector('#auto'); au.checked = !!board.tool.auto; au.onchange = () => { board.tool.auto = au.checked; paint(); toast(au.checked ? 'Auto-shape is on for the pen' : 'Auto-shape is off'); };
   placePop(anchor);
 }
-document.addEventListener('pointerdown', e => { if (pop && !pop.contains(e.target) && !addBtn.contains(e.target) && !toolBtns.shape.contains(e.target)) closePop(); });
+document.addEventListener('pointerdown', e => { if (pop && !pop.contains(e.target) && !addBtn.contains(e.target) && !toolBtns.shape.contains(e.target) && !toolBtns.erase.contains(e.target)) closePop(); });
+function openEraserPop(anchor) {
+  closePop(); pop = document.createElement('div'); pop.className = 'pop';
+  pop.innerHTML = '<div class="plabel">Eraser</div><div class="swrow" id="erm"></div><div class="plabel">Size (area eraser)</div><div class="swrow" id="ers"></div><p class="phelp">Tip: hold the S Pen side button to erase at any time, touching or hovering.</p>';
+  [['stroke', 'Whole stroke', '<path d="M4 17c3-6 5-6 8-2s5 4 8-2"/><path d="M3 3l18 18"/>'], ['area', 'Area', '<circle cx="12" cy="12" r="7"/><path d="M4 18c3-4 6-2 8-6"/>']].forEach(([k, n, ic]) => {
+    const b = document.createElement('button'); b.className = 'ppat' + (board.tool.er === k ? ' on' : ''); b.innerHTML = `<svg viewBox="0 0 24 24">${ic}</svg><span>${n}</span>`;
+    b.onclick = () => { board.tool.er = k; board.tool.t = 'erase'; paint(); closePop(); }; pop.querySelector('#erm').appendChild(b); });
+  ['Small', 'Medium', 'Large'].forEach((n, i) => { const b = document.createElement('button'); b.className = 'ppat' + (board.tool.erSz === i ? ' on' : '');
+    b.innerHTML = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="${3 + i * 3.5}"/></svg><span>${n}</span>`;
+    b.onclick = () => { board.tool.erSz = i; board.tool.er = 'area'; board.tool.t = 'erase'; paint(); closePop(); }; pop.querySelector('#ers').appendChild(b); });
+  placePop(anchor);
+}
+/* page overview grid */
+async function openOverview() {
+  await board.flush(); closePop();
+  const w = document.createElement('div'); w.className = 'modalWrap';
+  w.innerHTML = `<div class="modal ov" role="dialog" aria-modal="true" aria-labelledby="ovH">
+    <div class="row"><h2 id="ovH" style="flex:1">Pages</h2><button id="ovSel">Select pages</button><button class="primary" id="ovClose">Close</button></div>
+    <p class="help" id="ovTip">Tap a page to go to it. Use “Select pages” to delete, add or move several at once.</p>
+    <div class="thumbs big" id="ovGrid"></div>
+    <div class="row" id="ovActs" hidden><span id="ovN" class="help"></span><button id="ovUp">Move earlier</button><button id="ovDown">Move later</button><button id="ovAdd">Add page after</button><button class="danger" id="ovDel">Delete selected</button></div>
+    <div class="row"><button id="ovEnd">+ Add page at the end</button></div></div>`;
+  document.body.appendChild(w); const q = s => w.querySelector(s);
+  let selecting = false, picked = new Set();
+  const close = () => w.remove(); q('#ovClose').onclick = close; w.addEventListener('click', e => { if (e.target === w) close(); });
+  const render = () => {
+    const info = board.pageInfo(), grid = q('#ovGrid'); grid.innerHTML = '';
+    info.forEach(p => { const b = document.createElement('button'); b.type = 'button'; b.className = 'thumb' + (picked.has(p.i) ? ' on' : '') + (p.i === board.curPage ? ' cur' : '');
+      b.setAttribute('aria-label', 'Page ' + (p.i + 1)); b.innerHTML = `<span class="tn">${p.i + 1}</span>${p.kind === 'pdf' ? '<span class="tw pdf">PDF</span>' : ''}`;
+      b.onclick = () => { if (!selecting) { board.goPage(p.i); close(); return; } picked.has(p.i) ? picked.delete(p.i) : picked.add(p.i); b.classList.toggle('on'); acts(); };
+      grid.appendChild(b); });
+    (async () => { const boxes = [...grid.children]; for (const p of info) { if (!w.isConnected || !boxes[p.i]) return; try { const c = await board.renderPage(p.i, 180); c.className = 'tc'; boxes[p.i].prepend(c); } catch (e) {} } })();
+    acts();
+  };
+  const acts = () => { q('#ovActs').hidden = !selecting; q('#ovN').textContent = picked.size + ' selected'; q('#ovSel').textContent = selecting ? 'Cancel selecting' : 'Select pages'; };
+  q('#ovSel').onclick = () => { selecting = !selecting; picked.clear(); render(); };
+  q('#ovDel').onclick = e => { if (!picked.size) return toast('Pick pages first'); const b = e.currentTarget; if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = `Tap again to delete ${picked.size}`; return; } b.dataset.sure = ''; b.textContent = 'Delete selected'; board.deletePages([...picked]); picked.clear(); render(); };
+  q('#ovAdd').onclick = () => { const at = picked.size ? Math.max(...picked) + 1 : board.pageCount(); board.insertPage(at, null); picked.clear(); render(); };
+  q('#ovEnd').onclick = () => { board.insertPage(board.pageCount(), null); render(); };
+  const shift = d => { if (picked.size !== 1) return toast('Pick one page to move'); const i = [...picked][0], j = i + d; if (j < 0 || j >= board.pageCount()) return; board.movePage(i, j); picked = new Set([j]); render(); };
+  q('#ovUp').onclick = () => shift(-1); q('#ovDown').onclick = () => shift(1);
+  render();
+}
 /* selection toolbar */
 const selBar = document.createElement('div'); selBar.className = 'selbar'; selBar.hidden = true;
 selBar.innerHTML = '<span id="selN"></span><button id="selDup">Duplicate</button><button id="selDel" class="danger">Delete</button><button id="selDone">Done</button>';
@@ -294,8 +369,10 @@ async function openSettings() {
    <h2 style="font-size:16px;margin-top:6px">Google Drive</h2>
    <label for="dClient">Google Client ID<input id="dClient" placeholder="1234…apps.googleusercontent.com" autocomplete="off"></label>
    <label for="dRoot">Main Drive folder name<input id="dRoot"></label>
+   <p id="dCheck" class="help"></p>
    <div class="row"><button id="dConn" class="primary">Connect Drive</button><span id="dStat" style="font-size:13px;color:var(--muted)"></span></div>
    <p class="help"><b>Teaching on Zoom:</b> open a topic here, then in Zoom tap Share › Screen. Keep Zoom's own camera off and use this camera button instead.<br>
+   <b>Recording your voice during Zoom:</b> Android gives the microphone only to Zoom during a call. Join the meeting on your phone too for sound (phone mic on, phone speaker off), and on this tablet tap Zoom's <i>Disconnect audio</i>. Then this app can record your voice.<br>
    <b>Camera window:</b> drag it to move it, drag its corner to resize it, double-tap it to switch between a rectangle and a circle.<br>
    <b>S Pen:</b> hold the side button while writing to erase. One finger scrolls, two fingers zoom. Pull up past the last page to add a new one.<br>
    <b>Pen button test:</b> hold the side button and touch the board. <span id="penInfo">${esc(board.lastPen || 'Nothing yet')}</span>. If the button opens Samsung's Air command menu instead, turn off <i>Settings › Advanced features › S Pen › Air command</i> or its "pen button" option.<br>
@@ -308,6 +385,9 @@ async function openSettings() {
   const ds = drive.settings(); q('#dClient').value = ds.clientId; q('#dRoot').value = ds.root;
   const dstat = () => { const d = drive.settings(); q('#dStat').textContent = d.email ? 'Connected as ' + d.email : (d.clientId ? 'Not connected yet' : 'Paste your Client ID, then tap Connect'); q('#dConn').textContent = d.email ? 'Reconnect' : 'Connect Drive'; };
   dstat();
+  const idOk = v => /^\d{6,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com$/i.test(v);
+  const showId = () => { const v = q('#dClient').value.trim(); q('#dCheck').textContent = !v ? '' : idOk(v) ? `Looks right: ${v.length} characters, ends with .apps.googleusercontent.com` : (v.includes('…') || v.includes('...') ? 'This ID was copied shortened (it has “…”). Use the copy icon next to the full Client ID.' : v.startsWith('GOCSPX') ? 'This is the client secret. Copy the Client ID instead.' : 'This does not look like a full Client ID. It should be digits, a dash, letters, then .apps.googleusercontent.com'); q('#dCheck').className = 'help ' + (idOk(v) ? 'ok' : 'bad'); };
+  q('#dClient').addEventListener('input', showId); showId();
   const keepDrive = () => drive.saveSettings({ clientId: q('#dClient').value.trim(), root: q('#dRoot').value.trim() || 'CSwithSR Classes' });
   q('#dConn').onclick = async () => { await keepDrive(); try { await drive.signIn(true); toast('Google Drive connected'); } catch (e) { toast(e.message); } dstat(); };
   q('#sDone').onclick = async () => { await keepDrive(); close(); }; w.addEventListener('click', e => { if (e.target === w) close(); });
@@ -327,8 +407,8 @@ document.addEventListener('keydown', e => {
 /* ---------- start ---------- */
 (async () => {
   Object.assign(cfg, (await store.get('kv', 'cfg').catch(() => null)) || {});
-  Object.assign(board.tool, (await store.get('kv', 'tool').catch(() => null)) || {});
-  board.init({ el: $('#board'), canvas: $('#ink'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: onSelection, penInfo: t => { const el = document.getElementById('penInfo'); if (el) el.textContent = t; }, finger: () => cfg.finger, closePop,
+  Object.assign(board.tool, (await store.get('kv', 'tool').catch(() => null)) || {}); await loadNames();
+  board.init({ el: $('#board'), canvas: $('#ink'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: onSelection, penInfo: t => { const el = document.getElementById('penInfo'); if (el) el.textContent = t; }, pullHint: pullHint, finger: () => cfg.finger, closePop,
     hint: v => { $('#hint').style.opacity = v ? 1 : 0; }, page: (c, n) => { $('#pg').textContent = c + ' / ' + n; } });
   bg.init($('#bg'), () => $('#lib').hidden ? $('#win').getBoundingClientRect() : null);
   await cam.init({ el: $('#cam'), toast });
@@ -442,3 +522,6 @@ function driveStatus() {
   const st = drive.status(); shareB.title = st.msg || 'Send this class to Drive'; shareB.classList.toggle('warn', !!st.needsSignIn);
   if (!$('#lib').hidden && libView === 'ups') { clearTimeout(upT); upT = setTimeout(renderLib, 400); }
 }
+
+const pullEl = document.createElement('div'); pullEl.className = 'pullhint'; pullEl.hidden = true; document.getElementById('board').appendChild(pullEl);
+function pullHint(v) { pullEl.hidden = !v; pullEl.textContent = v === 2 ? 'Let go to add a new page' : 'Keep pulling to add a page'; pullEl.classList.toggle('ready', v === 2); }

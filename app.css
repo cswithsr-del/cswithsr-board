@@ -153,3 +153,17 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .selbar{position:fixed;z-index:15;display:flex;gap:6px;align-items:center;background:#120d36;border:1px solid var(--cy);border-radius:12px;padding:6px 8px;box-shadow:0 12px 30px rgba(0,0,0,.5)}
 .selbar span{font:600 12px var(--display);color:var(--muted);padding:0 4px}
 .selbar button{font:600 13px var(--display);color:var(--ink);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
+
+/* v4 */
+.phelp{font-size:12px;color:var(--muted);margin:4px 0 0;max-width:340px}
+.modal.ov{width:min(1000px,100%)}
+.thumbs.big{grid-template-columns:repeat(auto-fill,minmax(130px,1fr));max-height:58vh}
+.thumb.cur{border-color:var(--cy)!important}
+.thumb .tw.pdf{background:var(--cy)}
+.help.ok{color:#7CF29A}.help.bad{color:#ff8a84}
+.pullhint{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:rgba(18,13,54,.9);border:1px solid var(--line);color:var(--muted);font:600 13px var(--display);padding:8px 14px;border-radius:20px;pointer-events:none}
+.pullhint.ready{border-color:var(--acc);color:var(--acc)}
+.mini{font:600 11px var(--display);color:var(--ink);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:7px;padding:4px 8px;cursor:pointer;margin-left:auto}
+.ch h3 .mini{margin-left:auto}
+.tp .mini{margin-left:4px}
+.inl{flex:1;min-width:0;font:600 14px var(--display);color:var(--ink);background:#0b0726;border:1px solid var(--acc);border-radius:8px;padding:6px 8px}

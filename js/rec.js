@@ -56,7 +56,7 @@ function tick() {
   if (now - lastUi > 250) {
     lastUi = now; let lvl = 0;
     if (rec.analyser) { rec.analyser.getFloatTimeDomainData(rec.buf); let s = 0; for (const v of rec.buf) s += v * v; lvl = Math.min(1, Math.sqrt(s / rec.buf.length) * 6); }
-    if (!rec.paused && rec.analyser) { rec.silentFor = lvl < .01 ? rec.silentFor + .25 : 0; if (Math.abs(rec.silentFor - 20) < .2) opts.toast('No sound is reaching the recording. Zoom may be holding the microphone.'); }
+    if (!rec.paused && rec.analyser) { rec.silentFor = lvl < .01 ? rec.silentFor + .25 : 0; if (Math.abs(rec.silentFor - 20) < .2) opts.toast('No sound is reaching the recording. Zoom is holding the microphone: use your phone for Zoom audio and tap Disconnect audio in Zoom on this tablet.'); }
     opts.status({ t: elapsed(), level: lvl, paused: rec.paused });
   }
 }
