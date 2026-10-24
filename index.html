@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#070321">
+<title>CSwithSR Board</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+
+<div id="app">
+  <header>
+    <img alt="CSwithSR" src="icons/logo.png">
+    <div class="chips" id="chips"></div>
+  </header>
+  <nav class="rail" id="railL" aria-label="Class and ink"></nav>
+  <section id="win" aria-label="Lesson board">
+    <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i>
+      <div id="title"></div><span id="pg">1 / 1</span></div>
+    <div id="board"><canvas id="ink"></canvas>
+      <div id="hint">Write with your <b>S Pen</b><br>One finger scrolls · two fingers zoom<br>Hold the pen button to erase</div></div>
+  </section>
+  <nav class="rail" id="railR" aria-label="Tools"></nav>
+  <footer>@cswithsr</footer>
+</div>
+
+<div id="cam" hidden><video playsinline muted autoplay></video><span class="grip" aria-label="Resize camera"></span></div>
+
+<section id="lib" aria-label="Lesson library">
+  <div class="libwrap">
+    <div class="libtop">
+      <img alt="CSwithSR" src="icons/logo.png">
+      <div class="libtitle"><h1>Lesson Library</h1><p id="libsub">Pick a topic to open its notes</p></div>
+      <div class="libactions">
+        <input id="search" type="search" placeholder="Search topics" aria-label="Search topics">
+        <button id="quick" class="ghost">Quick board</button>
+        <button id="recsBtn" class="ghost">Recordings</button>
+      </div>
+    </div>
+    <div id="cont"></div>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div id="libbody"></div>
+  </div>
+</section>
+
+<button id="show" aria-label="Show tools"><svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+<input type="file" id="file" accept="application/pdf" hidden>
+<div id="toast" role="status"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
