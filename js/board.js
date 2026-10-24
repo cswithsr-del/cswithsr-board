@@ -311,10 +311,10 @@ export const hasSel = () => !!sel;
 /* ---- input ---- */
 function toDoc(e) { const r = cv.getBoundingClientRect(), s = sc(); return [(e.clientX - r.left) / s + view.sx, (e.clientY - r.top) / s + view.sy]; }
 function pageAt(y) { for (let i = pages.length - 1; i >= 0; i--) if (y >= tops[i]) return y <= tops[i] + pages[i].h ? i : -1; return -1; }
-const drawsWith = e => e.pointerType === 'pen' || e.pointerType === 'mouse' || (e.pointerType === 'touch' && opts.finger());
+const drawsWith = e => e.pointerType === 'pen' || e.pointerType === 'mouse' || (e.buttons & 34) || e.button === 2 || e.button === 5 || (e.pointerType === 'touch' && opts.finger());
 let btnFlag = false, btnFrom = '', lastPenSeen = -1e9;
 const isPenKey = e => performance.now() - lastPenSeen < 3000 && (/stylus|pen/i.test(e.code + e.key) || (e.key === 'Unidentified' && !e.ctrlKey && !e.altKey));
-const penButton = e => e.pointerType === 'pen' && (btnFlag || e.button === 2 || e.button === 5 || e.button === 1 || (e.buttons & 2) || (e.buttons & 4) || (e.buttons & 32));
+const penButton = e => (e.pointerType === 'pen' || ((e.buttons & 34) || e.button === 2 || e.button === 5)) && (btnFlag || e.button === 2 || e.button === 5 || e.button === 1 || (e.buttons & 2) || (e.buttons & 4) || (e.buttons & 32));
 function convertToErase() { if (live && live.mode === 'draw') { live = { mode: 'erase', id: live.id, hits: [], snap: new Map() }; req(); } }
 function endHoverErase() { if (live && live.hover) { finishErase(live); live = null; req(); } }
 export let lastPen = '';
@@ -365,7 +365,7 @@ function finishErase(L) {
 }
 function move(e) {
   // S Pen side button held while hovering: erase without touching the screen
-  if (e.pointerType === 'pen') {
+  if (e.pointerType === 'pen' || (e.buttons & 34)) {
     lastPenSeen = performance.now();
     if (!live && penButton(e)) { live = { mode: 'erase', id: e.pointerId, hits: [], snap: new Map(), hover: true }; }
     else if (live && live.hover && live.id === e.pointerId && !penButton(e)) { finishErase(live); live = null; req(); return; }
