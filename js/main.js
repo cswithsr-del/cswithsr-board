@@ -295,8 +295,8 @@ async function openOverview() {
   await board.flush(); closePop();
   const w = document.createElement('div'); w.className = 'modalWrap';
   w.innerHTML = `<div class="modal ov" role="dialog" aria-modal="true" aria-labelledby="ovH">
-    <div class="row"><h2 id="ovH" style="flex:1">Pages</h2><button id="ovSel">Select pages</button><button class="primary" id="ovClose">Close</button></div>
-    <p class="help" id="ovTip">Tap a page to go to it. Use “Select pages” to delete, add or move several at once.</p>
+    <div class="row"><h2 id="ovH" style="flex:1">Pages</h2><button id="ovSel" hidden>Cancel</button><button id="ovAll" hidden>Select all</button><button class="primary" id="ovClose">Close</button></div>
+    <p class="help" id="ovTip">Tap a page to go to it. Press and hold a page to select it, then tap more pages to delete, move or add after them.</p>
     <div class="thumbs big" id="ovGrid"></div>
     <div class="row" id="ovActs" hidden><span id="ovN" class="help"></span><button id="ovUp">Move earlier</button><button id="ovDown">Move later</button><button id="ovAdd">Add page after</button><button class="danger" id="ovDel">Delete selected</button></div>
     <div class="row"><button id="ovEnd">+ Add page at the end</button></div></div>`;
@@ -307,13 +307,19 @@ async function openOverview() {
     const info = board.pageInfo(), grid = q('#ovGrid'); grid.innerHTML = '';
     info.forEach(p => { const b = document.createElement('button'); b.type = 'button'; b.className = 'thumb' + (picked.has(p.i) ? ' on' : '') + (p.i === board.curPage ? ' cur' : '');
       b.setAttribute('aria-label', 'Page ' + (p.i + 1)); b.innerHTML = `<span class="tn">${p.i + 1}</span>${p.kind === 'pdf' ? '<span class="tw pdf">PDF</span>' : ''}`;
-      b.onclick = () => { if (!selecting) { board.goPage(p.i); close(); return; } picked.has(p.i) ? picked.delete(p.i) : picked.add(p.i); b.classList.toggle('on'); acts(); };
+      // press and hold a page to start selecting (like Samsung); then taps add or remove pages
+      let holdT = 0, held = false;
+      b.addEventListener('pointerdown', () => { held = false; clearTimeout(holdT); holdT = setTimeout(() => { held = true; if (!selecting) { selecting = true; picked.clear(); } picked.add(p.i); [...q('#ovGrid').children].forEach((el, i) => el.classList.toggle('on', picked.has(i))); acts(); navigator.vibrate && navigator.vibrate(20); }, 450); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => b.addEventListener(t, () => clearTimeout(holdT)));
+      b.addEventListener('contextmenu', e => e.preventDefault());
+      b.onclick = () => { if (held) { held = false; return; } if (!selecting) { board.goPage(p.i); close(); return; } picked.has(p.i) ? picked.delete(p.i) : picked.add(p.i); b.classList.toggle('on'); acts(); };
       grid.appendChild(b); });
     (async () => { const boxes = [...grid.children]; for (const p of info) { if (!w.isConnected || !boxes[p.i]) return; try { const c = await board.renderPage(p.i, 180); c.className = 'tc'; boxes[p.i].prepend(c); } catch (e) {} } })();
     acts();
   };
-  const acts = () => { q('#ovActs').hidden = !selecting; q('#ovN').textContent = picked.size + ' selected'; q('#ovSel').textContent = selecting ? 'Cancel selecting' : 'Select pages'; };
-  q('#ovSel').onclick = () => { selecting = !selecting; picked.clear(); render(); };
+  const acts = () => { if (selecting && !picked.size) selecting = false; q('#ovActs').hidden = !selecting; q('#ovSel').hidden = q('#ovAll').hidden = !selecting; q('#ovN').textContent = picked.size + ' selected'; };
+  q('#ovSel').onclick = () => { selecting = false; picked.clear(); render(); };
+  q('#ovAll').onclick = () => { picked = new Set(board.pageInfo().map(p => p.i)); [...q('#ovGrid').children].forEach(el => el.classList.add('on')); acts(); };
   q('#ovDel').onclick = e => { if (!picked.size) return toast('Pick pages first'); const b = e.currentTarget; if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = `Tap again to delete ${picked.size}`; return; } b.dataset.sure = ''; b.textContent = 'Delete selected'; board.deletePages([...picked]); picked.clear(); render(); };
   q('#ovAdd').onclick = () => { const at = picked.size ? Math.max(...picked) + 1 : board.pageCount(); board.insertPage(at, null); picked.clear(); render(); };
   q('#ovEnd').onclick = () => { board.insertPage(board.pageCount(), null); render(); };

@@ -167,3 +167,4 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .ch h3 .mini{margin-left:auto}
 .tp .mini{margin-left:4px}
 .inl{flex:1;min-width:0;font:600 14px var(--display);color:var(--ink);background:#0b0726;border:1px solid var(--acc);border-radius:8px;padding:6px 8px}
+.thumb{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
