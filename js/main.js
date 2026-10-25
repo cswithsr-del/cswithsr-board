@@ -5,6 +5,7 @@ import * as cam from './cam.js';
 import * as rec from './rec.js';
 import { LEVELS, topicId } from './syllabus.js';
 import * as drive from './drive.js';
+import * as ide from './ide.js';
 import { notesPdf } from './export.js';
 
 const $ = s => document.querySelector(s);
@@ -185,6 +186,7 @@ const IC = {
   lasso: '<path d="M12 4c5 0 9 2.6 9 6s-4 6-9 6c-1.4 0-2.7-.2-3.8-.5"/><path d="M5.2 13.8C3.8 12.8 3 11.5 3 10c0-3.4 4-6 9-6" stroke-dasharray="2.5 2.5"/><path d="M6 15c-1.5 1-1.8 2.8-.5 3.8 1 .8 2.5.4 3-1"/>',
   shape: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16.5" cy="7.5" r="4.5"/>',
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+  code: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/>',
   pen: '<path d="M4 20l4.5-1L19 8.5 15.5 5 5 15.5 4 20z"/><path d="M13.5 7l3.5 3.5"/>',
   hl: '<path d="M14.5 4.5l5 5-7.5 7.5h-5v-5z"/><path d="M7 17l-3 3h6"/>',
   erase: '<path d="M8 20h12"/><path d="M4.5 15.5l9-9 6 6-7.5 7.5H8.5z"/><path d="M9 11l6 6"/>',
@@ -212,13 +214,16 @@ const pauseBtn = btn(L, svg('pause'), 'Pause recording', () => rec.pause()); pau
 const recTime = document.createElement('span'); recTime.className = 'rectime'; recTime.hidden = true; L.appendChild(recTime);
 const meter = document.createElement('span'); meter.className = 'meter'; meter.innerHTML = '<b></b>'; meter.hidden = true; L.appendChild(meter);
 const shareB = btn(L, svg('cloud'), 'Send this class to Drive', openShare);
+const codeB = btn(L, svg('code'), 'Code: Python and pseudocode', () => setMode($('#ide').hidden ? 'code' : 'board'));
 hr(L);
 COLORS.forEach((c, i) => colorBtns.push(btn(L, `<span class="sw" style="background:${c}"></span>`, CNAMES[i] + ' ink', () => {
+  if (!$('#ide').hidden) setMode('board');
   if (board.hasSel()) { board.selRecolor(c); return; }
   board.tool.c = c; if (['erase', 'laser', 'lasso'].includes(board.tool.t)) board.tool.t = 'pen'; paint(); })));
 hr(L);
 board.SIZES.forEach((s, i) => sizeBtns.push(btn(L, `<span class="dot" style="width:${5 + i * 4}px;height:${5 + i * 4}px"></span>`, ['Fine', 'Medium', 'Bold'][i] + ' line', () => { board.tool.sz = i; paint(); })));
 [['pen', 'Pen'], ['hl', 'Highlighter'], ['shape', 'Shapes'], ['lasso', 'Select and move'], ['erase', 'Eraser'], ['laser', 'Laser pointer']].forEach(([k, l]) => toolBtns[k] = btn(R, svg(k), l, () => {
+  if (!$('#ide').hidden) setMode('board');
   if (k === 'shape' && board.tool.t === 'shape') return openShapePop(toolBtns.shape);
   if (k === 'erase' && board.tool.t === 'erase') return openEraserPop(toolBtns.erase);
   board.tool.t = k; if (k !== 'lasso') board.clearSel(); paint(); if (k === 'shape') openShapePop(toolBtns.shape); if (k === 'erase') openEraserPop(toolBtns.erase); }));
@@ -233,6 +238,10 @@ btn(R, svg('full'), 'Full screen', () => { const d = document; (d.fullscreenElem
 btn(R, svg('set'), 'Settings and help', openSettings);
 btn(R, svg('hide'), 'Hide tools', () => document.body.classList.add('hidden-ui'));
 $('#show').onclick = () => document.body.classList.remove('hidden-ui');
+function setMode(m) {
+  const code = m === 'code'; $('#ide').hidden = !code; $('#board').hidden = code; codeB.classList.toggle('on', code);
+  if (code) { board.clearSel(); ide.open(topic && topic.level === 'a2' ? 'py' : 'ps').then(() => ide.prewarm()); }
+}
 function paint() {
   const t = board.tool;
   colorBtns.forEach((b, i) => b.classList.toggle('on', COLORS[i] === t.c)); sizeBtns.forEach((b, i) => b.classList.toggle('on', i === t.sz));
@@ -419,7 +428,8 @@ document.addEventListener('keydown', e => {
     hint: v => { $('#hint').style.opacity = v ? 1 : 0; }, page: (c, n) => { $('#pg').textContent = c + ' / ' + n; } });
   bg.init($('#bg'), () => $('#lib').hidden ? $('#win').getBoundingClientRect() : null);
   await cam.init({ el: $('#cam'), toast });
-  await rec.init({ toast, status: recStatus, bgCanvas: bg.canvas, boardCanvas: board.canvas });
+  await rec.init({ toast, status: recStatus, bgCanvas: bg.canvas, boardCanvas: board.canvas, ideVisible: () => !$('#ide').hidden, drawIde: ctx => ide.drawInto(ctx) });
+  ide.init({ toast });
   await drive.init({ blobSource: src => src.type === 'rec' ? rec.blobFor(src.id) : store.get('blobs', src.key) });
   drive.onChange(driveStatus); driveStatus();
   history.replaceState({ v: 'lib' }, '');
