@@ -1,7 +1,7 @@
 // Builds a notes PDF from chosen board pages (PDF background + your writing). Works offline.
 import * as board from './board.js';
 let jsp = null;
-function lib() {
+export function lib() {
   if (!jsp) jsp = new Promise((ok, no) => {
     if (window.jspdf) return ok(window.jspdf.jsPDF);
     const s = document.createElement('script'); s.src = 'vendor/jspdf.umd.min.js'; s.onload = () => ok(window.jspdf.jsPDF); s.onerror = () => no(new Error('PDF maker missing')); document.head.appendChild(s);

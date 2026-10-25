@@ -211,3 +211,13 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .con-out .err{color:#ff8a84}.con-out .in{color:var(--cy)}.con-out .dim{color:#7b7896}
 .con-in{font:inherit;color:var(--cy);background:transparent;border:0;border-bottom:1px solid var(--acc);outline:none;min-width:40%;caret-color:var(--acc)}
 @media (max-width:900px){.ide-main{grid-template-columns:150px minmax(0,1fr)}}
+
+.codecard{display:flex;align-items:center;gap:16px;width:100%;text-align:left;cursor:pointer;color:var(--ink);font-family:var(--display);background:linear-gradient(90deg,rgba(92,225,255,.14),rgba(18,13,54,.85) 55%);border:1px solid rgba(92,225,255,.45);border-radius:16px;padding:14px 18px;margin-bottom:6px}
+.codecard .cic{width:46px;height:46px;border-radius:12px;background:rgba(92,225,255,.14);display:grid;place-items:center;flex:none}
+.codecard svg{width:26px;height:26px;fill:none;stroke:var(--cy);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.codecard small{display:block;font:700 11px var(--mono);letter-spacing:2px;color:var(--cy)}
+.codecard strong{display:block;font-size:18px}
+.codecard em{display:block;font-style:normal;color:var(--muted);font-size:13px}
+.codecard .meta{margin-left:auto;color:var(--muted);font-size:13px;white-space:nowrap}
+.backcode{font:700 13px var(--display);color:#07021f;background:var(--cy);border:0;border-radius:20px;padding:8px 16px;cursor:pointer;margin-right:auto;margin-left:14px}
+.ib.ann{color:var(--acc);border-color:rgba(242,181,58,.5)}

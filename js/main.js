@@ -36,11 +36,44 @@ async function allTopics() {
   return out;
 }
 const QUICK = { id: 'quick', name: 'Quick Board', level: 'ol', levelName: '', chips: LEVELS[0].chips, chapter: 0, chapterName: '' };
-async function findTopic(id) { if (id === 'quick') return QUICK; return (await allTopics()).find(t => t.id === id) || null; }
+function codeTopic(lv, prog) {
+  const L = LEVELS.find(l => l.id === lv) || LEVELS[0];
+  return prog ? { id: `code:${lv}:${prog}`, name: `${prog} (annotated)`, level: lv, levelName: L.name, chips: L.chips, chapter: 0, chapterName: 'Code Lab', codeLab: true, prog }
+    : { id: 'codelab:' + lv, name: 'Code Lab · ' + L.name, level: lv, levelName: L.name, chips: L.chips, chapter: 0, chapterName: 'Code Lab', codeLab: true };
+}
+async function findTopic(id) {
+  if (id === 'quick') return QUICK;
+  if (id.startsWith('codelab:')) return codeTopic(id.slice(8));
+  if (id.startsWith('code:')) { const [, lv, ...rest] = id.split(':'); return codeTopic(lv, rest.join(':')); }
+  return (await allTopics()).find(t => t.id === id) || null; }
 
+let codeLab = null;   // level id while the Code Lab is open
+function setHeader(title, chips) {
+  $('#title').textContent = title;
+  const el = $('#chips'); el.innerHTML = ''; (chips || []).forEach(c => { const s = document.createElement('span'); s.textContent = c; el.appendChild(s); });
+}
+async function openCodeLab(lv) {
+  await board.flush();
+  if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
+  codeLab = lv; topic = codeTopic(lv); setHeader(topic.name, topic.chips); $('#backCode').hidden = true;
+  $('#lib').hidden = true; document.body.classList.remove('libopen'); setMode('code');
+}
+// turn the current program into PDF pages and open them as a pen board
+async function startAnnotate() {
+  if (!codeLab || $('#ide').hidden) return; const L = LEVELS.find(l => l.id === codeLab);
+  toast('Making pages from your code…');
+  const snap = await ide.snapshotPdf(L.name); if (!snap) { toast('Open a program first'); return; }
+  await board.flush(); topic = codeTopic(codeLab, snap.prog);
+  setHeader(`${snap.name} · ${snap.lang === 'py' ? 'Python' : 'Pseudocode'}`, topic.chips);
+  await board.load(topic); setMode('board'); $('#backCode').hidden = false; $('#hint').style.opacity = 0;
+  if (board.pageCount() > 1 || (board.currentPage() && board.currentPage().k === 'pdf')) board.goPage(board.pageCount() - 1);
+  await board.importPdf(new File([snap.blob], snap.name + '.pdf', { type: 'application/pdf' }));
+}
+async function backToCode() { await board.flush(); topic = codeTopic(codeLab); setHeader(topic.name, topic.chips); $('#backCode').hidden = true; setMode('code'); }
 async function openTopic(t) {
   await board.flush();
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
+  codeLab = null; $('#backCode').hidden = true; setMode('board');
   topic = t; cfg.last = t.id; saveCfg();
   $('#title').textContent = t.chapter ? `${t.name.replace(/^\d+(\.\d+)?\s+/, '')} · Chapter ${t.chapter}` : t.name;
   const chips = $('#chips'); chips.innerHTML = ''; (t.chips || []).forEach(c => { const s = document.createElement('span'); s.textContent = c; chips.appendChild(s); });
@@ -78,6 +111,12 @@ async function renderLib() {
   const custom = await customTopics(); await loadNames();
   $('#editBtn').classList.toggle('primary', libEdit); $('#editBtn').textContent = libEdit ? 'Done editing' : 'Edit names';
   const levels = q ? LEVELS : LEVELS.filter(l => l.id === cfg.level);
+  if (!q && !libEdit) {
+    const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + lv.id + ':')).length;
+    const cl = document.createElement('button'); cl.className = 'codecard';
+    cl.innerHTML = `<span class="cic"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/></svg></span><span><small>CODE LAB · ${esc(lv.name.toUpperCase())}</small><strong>${lv.id === 'a2' ? 'Python' : 'Pseudocode and Python'}</strong><em>Write, run and annotate programs. Text files included.</em></span><span class="meta">${progs ? progs + (progs === 1 ? ' program' : ' programs') : 'Open'}</span>`;
+    cl.onclick = () => openCodeLab(lv.id); body.appendChild(cl);
+  }
   let shown = 0;
   for (const lv of levels) for (const p of lv.papers) {
     const sec = document.createElement('section'); sec.className = 'paper';
@@ -214,16 +253,15 @@ const pauseBtn = btn(L, svg('pause'), 'Pause recording', () => rec.pause()); pau
 const recTime = document.createElement('span'); recTime.className = 'rectime'; recTime.hidden = true; L.appendChild(recTime);
 const meter = document.createElement('span'); meter.className = 'meter'; meter.innerHTML = '<b></b>'; meter.hidden = true; L.appendChild(meter);
 const shareB = btn(L, svg('cloud'), 'Send this class to Drive', openShare);
-const codeB = btn(L, svg('code'), 'Code: Python and pseudocode', () => setMode($('#ide').hidden ? 'code' : 'board'));
 hr(L);
 COLORS.forEach((c, i) => colorBtns.push(btn(L, `<span class="sw" style="background:${c}"></span>`, CNAMES[i] + ' ink', () => {
-  if (!$('#ide').hidden) setMode('board');
+  if (!$('#ide').hidden) { startAnnotate(); }
   if (board.hasSel()) { board.selRecolor(c); return; }
   board.tool.c = c; if (['erase', 'laser', 'lasso'].includes(board.tool.t)) board.tool.t = 'pen'; paint(); })));
 hr(L);
 board.SIZES.forEach((s, i) => sizeBtns.push(btn(L, `<span class="dot" style="width:${5 + i * 4}px;height:${5 + i * 4}px"></span>`, ['Fine', 'Medium', 'Bold'][i] + ' line', () => { board.tool.sz = i; paint(); })));
 [['pen', 'Pen'], ['hl', 'Highlighter'], ['shape', 'Shapes'], ['lasso', 'Select and move'], ['erase', 'Eraser'], ['laser', 'Laser pointer']].forEach(([k, l]) => toolBtns[k] = btn(R, svg(k), l, () => {
-  if (!$('#ide').hidden) setMode('board');
+  if (!$('#ide').hidden) { startAnnotate(); }
   if (k === 'shape' && board.tool.t === 'shape') return openShapePop(toolBtns.shape);
   if (k === 'erase' && board.tool.t === 'erase') return openEraserPop(toolBtns.erase);
   board.tool.t = k; if (k !== 'lasso') board.clearSel(); paint(); if (k === 'shape') openShapePop(toolBtns.shape); if (k === 'erase') openEraserPop(toolBtns.erase); }));
@@ -239,8 +277,8 @@ btn(R, svg('set'), 'Settings and help', openSettings);
 btn(R, svg('hide'), 'Hide tools', () => document.body.classList.add('hidden-ui'));
 $('#show').onclick = () => document.body.classList.remove('hidden-ui');
 function setMode(m) {
-  const code = m === 'code'; $('#ide').hidden = !code; $('#board').hidden = code; codeB.classList.toggle('on', code);
-  if (code) { board.clearSel(); ide.open(topic && topic.level === 'a2' ? 'py' : 'ps').then(() => ide.prewarm()); }
+  const code = m === 'code'; $('#ide').hidden = !code; $('#board').hidden = code;
+  if (code) { board.clearSel(); ide.open(codeLab || 'ol').then(() => ide.prewarm()); }
 }
 function paint() {
   const t = board.tool;
@@ -444,7 +482,7 @@ document.addEventListener('keydown', e => {
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const dayOf = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 function levelFolder(t) { const lv = LEVELS.find(l => l.id === t.level); return lv ? `${lv.name.replace(/\//g, '-')} (${lv.code.replace(/ · /g, '-')})` : 'Other'; }
-function drivePath(t) { return t.id === 'quick' ? ['Quick Board'] : [levelFolder(t), `Chapter ${String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.name]; }
+function drivePath(t) { if (t.codeLab) return [levelFolder(t), 'Code Lab', ...(t.prog ? [t.prog] : [])]; return t.id === 'quick' ? ['Quick Board'] : [levelFolder(t), `Chapter ${String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.name]; }
 function ranges(ix) {
   const out = []; let a = null, b = null; const push = () => out.push(a === b ? `${a + 1}` : `${a + 1}-${b + 1}`);
   for (const i of ix) { if (a === null) { a = b = i; } else if (i === b + 1) b = i; else { push(); a = b = i; } }
@@ -459,7 +497,9 @@ async function queueRec(r) {
   toast(drive.settings().clientId ? 'Added to the Drive upload list' : 'Added to the upload list. Connect Google Drive in Settings to start sending.');
 }
 async function openShare() {
-  if (!topic) return; await board.flush();
+  if (!topic) return;
+  if (!$('#ide').hidden) { toast('Tap ✎ Annotate (or pick up a pen tool), write your notes, then tap the cloud button to send the PDF.'); return; }
+  await board.flush();
   const info = board.pageInfo(), t = topic;
   const touchedIx = info.filter(p => p.touched).map(p => p.i);
   let sel = new Set(); if (touchedIx.length) for (let i = Math.min(...touchedIx); i <= Math.max(...touchedIx); i++) sel.add(i);
@@ -562,3 +602,6 @@ function penTest() {
   addEventListener('keydown', kd, true); addEventListener('keyup', kd, true);
   w.querySelector('#ptDone').onclick = () => { removeEventListener('keydown', kd, true); removeEventListener('keyup', kd, true); w.remove(); };
 }
+
+$('#backCode').onclick = backToCode;
+document.addEventListener('click', e => { if (e.target.closest && e.target.closest('#ideAnn')) startAnnotate(); });

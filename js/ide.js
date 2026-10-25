@@ -1,12 +1,13 @@
 // Code workspace: editor with highlighting, console with keyboard input, and text files shared by Python and pseudocode.
 import * as store from './store.js';
 import * as pseudo from './pseudo.js';
+import { lib as pdfLib } from './export.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let opts, root, ta, hl, gut, out, inWrap, inBox, list;
 let cur = null;               // { kind: 'prog'|'txt', name, lang }
-let size = 20, running = null, worker = null, pyReady = false, waitInput = null;
+let LV = 'ol', size = 20, running = null, worker = null, pyReady = false, waitInput = null;
 
 const PS_KW = /\b(DECLARE|CONSTANT|INPUT|OUTPUT|PRINT|IF|THEN|ELSE|ENDIF|CASE|OF|OTHERWISE|ENDCASE|FOR|TO|STEP|NEXT|WHILE|DO|ENDWHILE|REPEAT|UNTIL|PROCEDURE|ENDPROCEDURE|CALL|FUNCTION|RETURNS|RETURN|ENDFUNCTION|BYREF|BYVAL|ARRAY|TYPE|ENDTYPE|OPENFILE|READFILE|WRITEFILE|CLOSEFILE|READ|WRITE|APPEND)\b/;
 const PS_TYPES = /\b(INTEGER|REAL|STRING|CHAR|BOOLEAN|DATE|TRUE|FALSE|AND|OR|NOT|DIV|MOD)\b/;
@@ -37,9 +38,11 @@ function tokens(line, lang) {
 }
 
 /* ---------- storage ---------- */
-const progKey = n => 'prog:' + n, fileKey = n => 'file:' + n;
-export async function listProgs() { return (await store.getPrefix('kv', 'prog:')).map(([k, v]) => ({ name: k.slice(5), ...v })).sort((a, b) => b.updated - a.updated); }
-export async function listFiles() { return (await store.getPrefix('kv', 'file:')).map(([k, v]) => ({ name: k.slice(5), text: v })); }
+// every level (O Level, AS, A2) has its own programs and text files
+const PP = () => `cp:${LV}:`, FP = () => `cf:${LV}:`;
+const progKey = n => PP() + n, fileKey = n => FP() + n;
+export async function listProgs() { const p = PP(); return (await store.getPrefix('kv', p)).map(([k, v]) => ({ name: k.slice(p.length), ...v })).sort((a, b) => b.updated - a.updated); }
+export async function listFiles() { const p = FP(); return (await store.getPrefix('kv', p)).map(([k, v]) => ({ name: k.slice(p.length), text: v })); }
 const readFile = async n => { const v = await store.get('kv', fileKey(n)); return v === undefined ? null : v; };
 const writeFile = (n, t) => store.put('kv', fileKey(n), t);
 
@@ -81,9 +84,17 @@ print("Report.txt written")
 ` },
 };
 async function ensureSamples() {
-  if (await store.get('kv', 'ideInit')) return;
-  for (const [n, v] of Object.entries(SAMPLES)) { if (v.txt) await writeFile(n, v.txt); else await store.put('kv', progKey(n), { lang: v.lang, code: v.code, updated: Date.now() }); }
-  await store.put('kv', 'ideInit', 1);
+  if (await store.get('kv', 'ideInit:' + LV)) return;
+  if (LV === 'ol') { // programs made before levels existed move into O Level
+    for (const [k, v] of await store.getPrefix('kv', 'prog:')) { await store.put('kv', progKey(k.slice(5)), v); await store.del('kv', k); }
+    for (const [k, v] of await store.getPrefix('kv', 'file:')) { await store.put('kv', fileKey(k.slice(5)), v); await store.del('kv', k); }
+  }
+  for (const [n, v] of Object.entries(SAMPLES)) {
+    if (LV === 'a2' && v.lang === 'ps') continue;
+    if (v.txt) { if ((await readFile(n)) === null) await writeFile(n, v.txt); }
+    else if (!(await store.get('kv', progKey(n)))) await store.put('kv', progKey(n), { lang: v.lang, code: v.code, updated: Date.now() });
+  }
+  await store.put('kv', 'ideInit:' + LV, 1);
 }
 
 /* ---------- UI ---------- */
@@ -98,6 +109,7 @@ export function init(o) {
     <button class="ib" data-ins="←" aria-label="Insert arrow">←</button><button class="ib" data-ins="    " aria-label="Insert indent">⇥</button>
     <button class="ib" data-ins=":">:</button><button class="ib" data-ins='"'>"</button><button class="ib" data-ins="()">( )</button><button class="ib" data-ins="[]">[ ]</button>
     <button class="ib" id="ideSm" aria-label="Smaller text">A−</button><button class="ib" id="ideLg" aria-label="Bigger text">A+</button>
+    <button class="ib ann" id="ideAnn" aria-label="Annotate this program with the pen">✎ Annotate</button>
     <button class="run" id="ideRun">▶ Run</button><button class="stop" id="ideStop" hidden>■ Stop</button>
   </div>
   <div class="ide-main">
@@ -116,11 +128,13 @@ export function init(o) {
   $('#ideFiles').onclick = () => { root.classList.toggle('noside'); store.put('kv', 'ideSide', !root.classList.contains('noside')).catch(() => {}); };
   if (navigator.serviceWorker) navigator.serviceWorker.addEventListener && 0;
 }
-export async function open(defaultLang) {
+export async function open(lv) {
+  if (lv !== LV || !cur) { await saveNow(); LV = lv; cur = null; out.innerHTML = ''; }
+  const defaultLang = LV === 'a2' ? 'py' : 'ps';
   await ensureSamples();
   size = (await store.get('kv', 'ideSize')) || 20; setSize(size);
   if ((await store.get('kv', 'ideSide')) === false) root.classList.add('noside');
-  const last = await store.get('kv', 'ideLast');
+  const last = await store.get('kv', 'ideLast:' + LV);
   if (!cur) {
     const progs = await listProgs();
     const pick = (last && progs.find(p => p.name === last)) || progs.find(p => p.lang === defaultLang) || progs[0];
@@ -131,7 +145,7 @@ export async function open(defaultLang) {
 function setSize(s) { size = Math.max(12, Math.min(40, s)); root.style.setProperty('--fs', size + 'px'); store.put('kv', 'ideSize', size).catch(() => {}); paint(); }
 async function openDoc(d) {
   await saveNow(); cur = d;
-  if (d.kind === 'prog') { const p = await store.get('kv', progKey(d.name)); ta.value = p ? p.code : ''; cur.lang = p ? p.lang : d.lang; store.put('kv', 'ideLast', d.name).catch(() => {}); }
+  if (d.kind === 'prog') { const p = await store.get('kv', progKey(d.name)); ta.value = p ? p.code : ''; cur.lang = p ? p.lang : d.lang; store.put('kv', 'ideLast:' + LV, d.name).catch(() => {}); }
   else { ta.value = (await readFile(d.name)) || ''; }
   root.querySelectorAll('[data-lang]').forEach(b => b.classList.toggle('on', cur.kind === 'prog' && b.dataset.lang === cur.lang));
   $('#ideName').textContent = d.kind === 'prog' ? d.name + (cur.lang === 'py' ? '.py' : '') : '📄 ' + d.name;
@@ -313,4 +327,75 @@ export function drawInto(ctx) {
   show.forEach((ln, k) => { let x = box2.left + 14; const y = box2.top + 8 + k * olh + olh / 2; for (const [s, c] of ln) { ctx.fillStyle = c === 'err' ? '#ff8a84' : c === 'in' ? '#5CE1FF' : c === 'dim' ? '#7b7896' : '#F5F1EA'; ctx.fillText(s, x, y); x += ctx.measureText(s).width; } });
   if (waitInput) { const y = box2.top + 8 + show.length * olh - olh / 2; ctx.fillStyle = '#F2B53A'; ctx.fillRect(box2.left + 14 + (show.length ? ctx.measureText(show[show.length - 1].map(s => s[0]).join('')).width : 0), y - ofs / 2, 2, ofs); }
   ctx.restore(); ctx.restore();
+}
+
+/* ---------- annotation pages: the program as PDF pages with room to write ---------- */
+export const current = () => cur && { ...cur, level: LV };
+export async function snapshotPdf(levelLabel) {
+  if (!cur || cur.kind !== 'prog') return null;
+  await saveNow();
+  try { await document.fonts.load('24px "JetBrains Mono"'); await document.fonts.load('700 30px "Space Grotesk"'); } catch (e) {}
+  const JsPDF = await pdfLib();
+  const W = 1240, H = 1754, codeX = 120, noteX = 960, top0 = 210, bottom = H - 110, LH = 46, FS = 22;
+  const lang = cur.lang, L = lang, code = ta.value.replace(/\t/g, '    ').split('\n');
+  while (code.length && !code[code.length - 1].trim()) code.pop();
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+  x.font = `${FS}px "JetBrains Mono", monospace`; const cw = x.measureText('M').width, maxC = Math.max(20, Math.floor((noteX - 30 - codeX) / cw));
+  // wrap long lines
+  const rows = [];
+  code.forEach((ln, i) => {
+    // wrap at a space where possible; continuation lines keep the indent plus 4
+    let rest = ln, first = true; const ind = (/^\s*/.exec(ln) || [''])[0] + '    ';
+    do {
+      const room = first ? maxC : maxC - ind.length; let cut = rest.length <= room ? rest.length : rest.lastIndexOf(' ', room);
+      if (cut <= room * .4) cut = Math.min(room, rest.length);
+      rows.push({ n: first ? i + 1 : null, t: (first ? '' : ind) + rest.slice(0, cut) }); rest = rest.slice(cut).replace(/^ /, ''); first = false;
+    } while (rest.length);
+  });
+  const outText = out.innerText.replace(/\n?— Program finished —\n?/g, '').trim();
+  const perPage = Math.floor((bottom - top0) / LH);
+  const pages = []; for (let k = 0; k < rows.length || !pages.length; k += perPage) pages.push(rows.slice(k, k + perPage));
+  const title = cur.name + (lang === 'py' ? '.py' : ''), doc = new JsPDF({ unit: 'pt', format: 'a4', compress: true });
+  const date = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  const frame = (pn, total) => {
+    x.setTransform(1, 0, 0, 1, 0, 0); x.fillStyle = '#0b1230'; x.fillRect(0, 0, W, H);
+    x.textBaseline = 'alphabetic'; x.textAlign = 'left';
+    x.fillStyle = '#d4a537'; x.font = '700 20px "JetBrains Mono", monospace'; x.fillText(`CSWITHSR · CODE LAB · ${levelLabel.toUpperCase()}`, codeX - 60, 78);
+    x.fillStyle = '#eef1fa'; x.font = '700 40px "Space Grotesk", sans-serif'; x.fillText(title, codeX - 60, 132);
+    x.fillStyle = lang === 'py' ? '#7CF29A' : '#5CE1FF'; x.font = '700 20px "JetBrains Mono", monospace'; x.textAlign = 'right'; x.fillText(lang === 'py' ? 'PYTHON' : 'PSEUDOCODE', W - 60, 78);
+    x.fillStyle = '#8f97b8'; x.font = '500 20px "Space Grotesk", sans-serif'; x.fillText(date, W - 60, 132);
+    x.strokeStyle = 'rgba(212,165,55,.5)'; x.lineWidth = 2; x.beginPath(); x.moveTo(codeX - 60, 160); x.lineTo(W - 60, 160); x.stroke();
+    x.strokeStyle = 'rgba(255,255,255,.12)'; x.setLineDash([6, 8]); x.beginPath(); x.moveTo(noteX, top0 - 20); x.lineTo(noteX, bottom); x.stroke(); x.setLineDash([]);
+    x.fillStyle = 'rgba(255,255,255,.28)'; x.font = '700 16px "JetBrains Mono", monospace'; x.textAlign = 'left'; x.fillText('NOTES', noteX + 20, top0 - 2);
+    x.fillStyle = '#8f97b8'; x.font = '500 18px "Space Grotesk", sans-serif'; x.textAlign = 'left'; x.fillText('@cswithsr', codeX - 60, H - 50);
+    x.textAlign = 'right'; x.fillText(`Page ${pn} of ${total}`, W - 60, H - 50);
+  };
+  // the program output, if it was run, goes after the code
+  const outRows = outText ? outText.split('\n').flatMap(l => { const r = []; for (let k = 0; k < Math.max(1, l.length); k += maxC) r.push(l.slice(k, k + maxC)); return r; }).slice(0, 200) : [];
+  let outPages = []; if (outRows.length) { const lastRoom = perPage - pages[pages.length - 1].length - 2; if (lastRoom >= Math.min(outRows.length, 4)) { pages[pages.length - 1].outFrom = 0; } }
+  const plan = pages.map(p => ({ code: p, out: [] }));
+  if (outRows.length) {
+    let rest = outRows.slice(); const lp = plan[plan.length - 1]; const room = perPage - lp.code.length - 2;
+    if (room >= 3) { lp.out = rest.slice(0, room); rest = rest.slice(room); }
+    while (rest.length) { plan.push({ code: [], out: rest.slice(0, perPage - 1) }); rest = rest.slice(perPage - 1); }
+  }
+  plan.forEach((pg, i) => {
+    frame(i + 1, plan.length); let y = top0 + LH * .7;
+    x.font = `${FS}px "JetBrains Mono", monospace`;
+    for (const r of pg.code) {
+      if (r.n) { x.textAlign = 'right'; x.fillStyle = '#5d6690'; x.fillText(String(r.n), codeX - 24, y); }
+      x.textAlign = 'left'; let cx = codeX; for (const [t, col] of tokens(r.t, L)) { x.fillStyle = COL[col] || '#eef1fa'; x.fillText(t, cx, y); cx += cw * t.length; }
+      y += LH;
+    }
+    if (pg.out.length) {
+      y += LH * .3; const bh = (pg.out.length + 1) * LH * .8 + 20;
+      x.fillStyle = 'rgba(0,0,0,.35)'; x.beginPath(); x.roundRect(codeX - 40, y - LH * .7, noteX - codeX + 10, bh, 12); x.fill();
+      x.fillStyle = '#5CE1FF'; x.font = '700 18px "JetBrains Mono", monospace'; x.fillText('OUTPUT', codeX - 20, y - 6); y += LH * .8;
+      x.font = `${FS * .9}px "JetBrains Mono", monospace`; x.fillStyle = '#eef1fa';
+      for (const o of pg.out) { x.fillText(o, codeX - 20, y); y += LH * .8; }
+    }
+    if (i) doc.addPage('a4', 'portrait');
+    doc.addImage(c.toDataURL('image/jpeg', .9), 'JPEG', 0, 0, 595.28, 841.89, undefined, 'FAST');
+  });
+  return { blob: doc.output('blob'), name: title, lang, prog: cur.name };
 }
