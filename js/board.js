@@ -100,7 +100,7 @@ function saveNow() {
   const strokes = pages.reduce((a, p) => a + p.s.length, 0);
   store.put('kv', 'm:' + topic.id, { pages: pages.length, strokes, updated: Date.now() }).catch(() => {});
   return store.put('topics', topic.id, { id: topic.id, pdfs: pdfDocs.length, sy: view.sy, updated: Date.now(), strokes, today: { day: dayStr(), ids: [...touched] },
-    pages: pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0 })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h })) })) });
+    pages: pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0, gid: st.gid })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h })) })) });
 }
 
 /* ---- geometry ---- */
@@ -385,19 +385,22 @@ function down(e) {
       const pg = pageAt(y); if (pg < 0) { setSel(null); return; }
       setSel(null); live = { mode: 'lasso', id: e.pointerId, page: pages[pg], path: [[x, y]] }; req(); return;
     }
-    if (sel) setSel(null);
+    if (sel) { const h = hitSel(x, y); if (h && h.kind === 'scale') { startXform(e.pointerId, x, y, h); return; } setSel(null); }
     const pg = pageAt(y); if (pg < 0) return;
     const page = pages[pg], ly = y - tops[pg];
     if (m === 'shape') { live = { mode: 'shape', id: e.pointerId, page, sts: [], x0: x, y0: ly, x1: x, y1: ly }; opts.hint(false); req(); return; }
     const st = { t: m === 'hl' ? 'hl' : 'pen', c: m === 'hl' ? hlColor() : tool.c, w: m === 'hl' ? SIZES[tool.sz] * 4.2 : SIZES[tool.sz], p: [] };
     const pr = e.pointerType === 'pen' ? (e.pressure || .5) : .5;
-    live = { mode: 'draw', id: e.pointerId, page, st, pp: pr };
+    live = { mode: 'draw', id: e.pointerId, page, st, pp: pr, still: true, sx: x, sy: y };
+    const me = live;
+    me.hold = setTimeout(() => { if (live !== me || !me.still) return; const o = hitObject(x, y); if (!o) return; sel = o; selBB(); setSel(sel); startXform(e.pointerId, x, y, { kind: 'move' }); navigator.vibrate && navigator.vibrate(15); req(); }, 550);
     st.p.push(+x.toFixed(2), +ly.toFixed(2), +pr.toFixed(3)); build(st); opts.hint(false); req(); return;
   }
   if (e.pointerType === 'touch') {
     if (penDown || performance.now() - lastPenUp < 250) return;
     if ((e.width || 0) > 45 && (e.height || 0) > 45) return;
-    touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0 }); pull = 0; atEnd = view.sy >= maxSy() - 2;
+    if (sel && !touches.size) { const [x, y] = toDoc(e); const h = hitSel(x, y); if (h) { try { cv.setPointerCapture(e.pointerId); } catch (_) {} startXform(e.pointerId, x, y, h); return; } }
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t0: performance.now(), t: performance.now(), vx: 0, vy: 0 }); pull = 0; atEnd = view.sy >= maxSy() - 2;
     if (touches.size === 2) {
       const [a, b] = [...touches.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y) || 1; const r = cv.getBoundingClientRect();
       pinch = { d0: d, z0: view.z, dx: ((a.x + b.x) / 2 - r.left) / sc() + view.sx, dy: ((a.y + b.y) / 2 - r.top) / sc() + view.sy };
@@ -428,6 +431,7 @@ function move(e) {
       const ly = y - tops[pages.indexOf(live.page)];
       if (live.mode === 'shape') { let x1 = x, y1 = ly; if (tool.shape === 'line' || tool.shape === 'arrow') { const ang = Math.atan2(y1 - live.y0, x1 - live.x0); const sn = Math.round(ang / (Math.PI / 4)) * Math.PI / 4; if (Math.abs(ang - sn) < .06) { const L = Math.hypot(x1 - live.x0, y1 - live.y0); x1 = live.x0 + L * Math.cos(sn); y1 = live.y0 + L * Math.sin(sn); } }
         live.x1 = x1; live.y1 = y1; live.sts = shapeParts(tool.shape, live.x0, live.y0, x1, y1).map(pts => { const st = { t: 'pen', c: tool.c, w: SIZES[tool.sz], sh: 1, p: flat(pts) }; build(st); return st; }); continue; }
+      if (live.still && Math.hypot(x - live.sx, y - live.sy) > 4 / view.z) { live.still = false; clearTimeout(live.hold); }
       const P = live.st.p, n = P.length, dx = x - P[n - 3], dy = ly - P[n - 2];
       if (dx * dx + dy * dy < (0.35 / view.z) ** 2) continue;
       let pr = ev.pointerType === 'pen' ? (ev.pressure || live.pp) : .5; pr = live.pp * .55 + pr * .45; live.pp = pr;
@@ -467,18 +471,22 @@ function xform(x, y) {
 function up(e) {
   if (e.pointerType === 'pen' && btnFrom === 'menu') { btnFlag = false; btnFrom = ''; }
   if (live && e.pointerId === live.id) {
-    const L = live;
+    const L = live; clearTimeout(L.hold);
     if (L.mode === 'draw' && L.st.p.length) {
       if (tool.auto && L.st.t === 'pen') recognise(L.st);
       touched.add(L.page.id); L.page.s.push(L.st); undo.push({ t: 'add', page: L.page, st: L.st }); redo = []; save();
     }
-    if (L.mode === 'shape' && L.sts.length && Math.hypot(L.x1 - L.x0, L.y1 - L.y0) > 4) { touched.add(L.page.id); L.page.s.push(...L.sts); undo.push({ t: 'addmany', page: L.page, sts: L.sts }); redo = []; save(); }
+    if (L.mode === 'shape' && L.sts.length && Math.hypot(L.x1 - L.x0, L.y1 - L.y0) > 4) { const gid = pid(); L.sts.forEach(s => { s.gid = gid; }); touched.add(L.page.id); L.page.s.push(...L.sts); undo.push({ t: 'addmany', page: L.page, sts: L.sts }); redo = []; save(); }
     if (L.mode === 'erase') finishErase(L);
     if (L.mode === 'lasso') finishLasso(L.path, L.page);
     if (L.mode === 'xform') { undo.push({ t: 'xform', items: L.orig.map(o => ({ st: o.st, before: [o.p, o.w], after: [o.st.p, o.st.w] })), imgs: (L.oimg || []).map(q => ({ o: q.o, before: q.r, after: [q.o.x, q.o.y, q.o.w, q.o.h] })) }); redo = []; touched.add(sel.page.id); save(); reportSel(); }
     live = null; penDown = false; lastPenUp = performance.now(); req(); return;
   }
   const t = touches.get(e.pointerId); if (!t) return; touches.delete(e.pointerId);
+  // a quick tap (no scrolling) on a picture or shape selects it; a tap elsewhere clears the selection
+  if (!pinch && !touches.size && e.type === 'pointerup' && Math.hypot(e.clientX - t.sx, e.clientY - t.sy) < 10 && performance.now() - t.t0 < 400) {
+    const [x, y] = toDoc(e), o = hitObject(x, y); if (o) { sel = o; selBB(); setSel(sel); return; } if (sel) { setSel(null); return; }
+  }
   if (pinch && touches.size < 2) { pull = 0; opts.pullHint && opts.pullHint(0); pinch = null; if (touches.size === 1) { const o = [...touches.values()][0]; o.vx = o.vy = 0; } refreshPdfRes(); return; }
   if (pull) { opts.pullHint && opts.pullHint(0); const add = pull > PULL && atEnd && e.type === 'pointerup'; pull = 0; atEnd = false; if (add) { addPageEnd(); return; } }
   if (touches.size === 0 && e.type === 'pointerup' && performance.now() - t.t < 80) startInertia(t.vx, t.vy);
@@ -655,3 +663,27 @@ export async function insertImage(file) {
 }
 export const pageCountNow = () => pages.length;
 export const _view = () => ({ ...view });
+
+function startXform(id, x, y, h) {
+  live = { mode: 'xform', id, h, x0: x, y0: y, orig: sel.items.map(st => ({ st, p: st.p.slice(), w: st.w })), oimg: (sel.imgs || []).map(o => ({ o, r: [o.x, o.y, o.w, o.h] })) };
+}
+// the picture or drawn shape (a whole gate counts as one) under a point
+function hitObject(x, y) {
+  const pg = pageAt(y); if (pg < 0) return null; const page = pages[pg], ly = y - tops[pg];
+  for (let i = (page.im || []).length - 1; i >= 0; i--) { const o = page.im[i]; if (x >= o.x && x <= o.x + o.w && ly >= o.y && ly <= o.y + o.h) return { page, items: [], imgs: [o] }; }
+  const r = 12 / view.z;
+  for (let i = page.s.length - 1; i >= 0; i--) {
+    const st = page.s[i]; if (!st.sh) continue; const b = st.bb, pad = r + st.w; if (x < b[0] - pad || x > b[2] + pad || ly < b[1] - pad || ly > b[3] + pad) continue;
+    // anywhere inside a shape (or a whole gate) picks it up
+    return { page, items: st.gid ? page.s.filter(s => s.gid === st.gid) : [st], imgs: [] };
+  }
+  return null;
+}
+// render one page of a PDF to a picture (to place it on a page instead of adding it as pages)
+export async function pdfPageImage(file, n) {
+  const doc = await openPdf(await file.arrayBuffer()); const pg = await doc.getPage(Math.max(1, Math.min(n, doc.numPages)));
+  const v1 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: 1600 / v1.width }); const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: x, viewport: vp }).promise;
+  return new Promise(ok => c.toBlob(bl => ok(new File([bl], 'page.png', { type: 'image/png' })), 'image/png'));
+}
+export async function pdfPages(file) { const doc = await openPdf(await file.arrayBuffer()); return doc.numPages; }

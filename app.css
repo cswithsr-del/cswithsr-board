@@ -226,8 +226,9 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .rail .codeb.on{background:rgba(92,225,255,.25)}
 
 /* two windows side by side */
-#panes{flex:1;display:flex;min-height:0;gap:3px;background:#2a2550;border-radius:0 0 16px 16px;overflow:hidden}
-#panes>#board,#panes>#ide,#panes>#pane2{flex:1 1 0;min-width:0;border-radius:0}
+#panes{--p2:50%;flex:1;display:flex;min-height:0;gap:0;background:#2a2550;border-radius:0 0 16px 16px;overflow:hidden}
+#panes>#board,#panes>#ide{flex:1 1 0;min-width:0;border-radius:0}
+#panes>#pane2{flex:0 0 var(--p2);min-width:0;border-radius:0}
 #pane2{display:flex;flex-direction:column;background:var(--board)}
 #pane2[hidden]{display:none!important}
 .p2bar{display:flex;align-items:center;gap:6px;padding:5px 8px;background:#16142a;border-bottom:1px solid var(--line)}
@@ -239,3 +240,10 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 
 .dh{cursor:grab;color:var(--muted);font-size:18px;padding:0 4px;touch-action:none;-webkit-user-select:none;user-select:none}
 .dragging{opacity:.75;outline:2px dashed var(--cy);outline-offset:2px}
+
+#divider{display:none;flex:0 0 14px;cursor:col-resize;touch-action:none;position:relative;background:#16142a}
+.split #divider{display:block}
+#divider::before{content:"";position:absolute;left:5px;top:0;bottom:0;width:4px;background:#2a2550}
+#divider::after{content:"";position:absolute;left:3px;top:50%;width:8px;height:44px;margin-top:-22px;border-radius:4px;background:var(--cy);opacity:.7}
+#divider.drag::after{opacity:1;background:var(--acc)}
+.ib.danger{color:#ff8a84;border-color:rgba(255,95,87,.5)}

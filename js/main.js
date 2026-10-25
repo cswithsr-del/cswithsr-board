@@ -200,6 +200,10 @@ async function renderLib() {
       if (q && !match.length) continue;
       const card = document.createElement('div'); card.className = 'ch'; card.dataset.key = ch.n;
       card.innerHTML = `<h3>${libEdit ? '<span class="dh" aria-label="Drag to move this chapter">⠿</span>' : ''}<b>${chLabel(ch)}</b><span class="cn">${esc(cName)}</span></h3>`;
+      const renCh = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = baseOf(lv.id) + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
+      const delCh = async () => { NAMES.trash.push({ kind: 'chapter', key: chKey(lv.id, ch.n), base: baseOf(lv.id), n: ch.n, paper: p.id, name: `${chLabel(ch)} ${cName}`, level: lv.name, at: Date.now() }); await saveNames(); toast('Chapter moved to Trash. Restore it from Trash with everything in it.'); renderLib(); };
+      const saveChOrder = async keys => { NAMES.order.ch[baseOf(lv.id) + ':' + p.id] = keys.map(Number); await saveNames(); };
+      if (!libEdit && !q) holdable(card.querySelector('h3'), card, grid, '.ch', true, saveChOrder, [['Rename chapter', renCh], ['Move to Trash', delCh, true]]);
       if (libEdit) {
         const pen = document.createElement('button'); pen.className = 'mini'; pen.textContent = 'Rename'; card.querySelector('h3').appendChild(pen);
         pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = baseOf(lv.id) + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
@@ -220,7 +224,12 @@ async function renderLib() {
           hd.onclick = async () => { if (!hd.dataset.sure) { hd.dataset.sure = 1; hd.textContent = 'Move to Trash?'; return; }
             NAMES.trash.push({ kind: 'topic', key, base: baseOf(lv.id), ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); };
           b.append(rn, hd);
-        } else b.onclick = () => openTopic({ id, orig, codeScope: 't:' + key, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id });
+        } else {
+          b.onclick = () => { if (b._held) { b._held = false; return; } openTopic({ id, orig, codeScope: 't:' + key, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id }); };
+          if (!q) holdable(b, b, card, '.tp', false, async keys => { NAMES.order.tp[baseOf(lv.id) + ':' + ch.n] = keys; await saveNames(); }, [
+            ['Rename subtopic', () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[key] = v; else delete NAMES.tp[key]; await saveNames(); renderLib(); })],
+            ['Move to Trash', async () => { NAMES.trash.push({ kind: 'topic', key, base: baseOf(lv.id), ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); }, true]]);
+        }
         card.appendChild(b);
         if (libEdit) dragSort(b.querySelector('.dh'), b, card, '.tp', false, async keys => { NAMES.order.tp[baseOf(lv.id) + ':' + ch.n] = keys; await saveNames(); });
       }
@@ -296,6 +305,41 @@ function dragSort(handle, item, container, selector, grid, done) {
       done([...container.querySelectorAll(':scope > ' + selector)].map(el => el.dataset.key)); };
     addEventListener('pointermove', mv); addEventListener('pointerup', end); addEventListener('pointercancel', end);
   });
+}
+// Press and hold an item: lift it (drag to move it), or let go without moving to see its options
+let holdDrag = false;
+document.addEventListener('touchmove', e => { if (holdDrag) e.preventDefault(); }, { passive: false });
+function holdable(handle, item, container, selector, grid, saveOrder, menu) {
+  handle.addEventListener('contextmenu', e => e.preventDefault());
+  handle.addEventListener('pointerdown', e => {
+    if (e.button > 0 || e.target.closest('.mini,.inl,input')) return;
+    const sx = e.clientX, sy = e.clientY; let lifted = false, dragged = false;
+    const timer = setTimeout(() => { lifted = true; holdDrag = true; item.classList.add('dragging'); navigator.vibrate && navigator.vibrate(20); }, 450);
+    const mv = ev => {
+      if (!lifted) { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) cleanup(); return; }
+      if (!dragged && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 8) return; dragged = true;
+      const sibs = [...container.querySelectorAll(':scope > ' + selector)].filter(x => x !== item); let target = null;
+      for (const s of sibs) { const r = s.getBoundingClientRect(); if (grid ? (ev.clientY < r.top || (ev.clientY <= r.bottom && ev.clientX < r.left + r.width / 2)) : ev.clientY < r.top + r.height / 2) { target = s; break; } }
+      if (target) { if (item.nextElementSibling !== target) container.insertBefore(item, target); } else if (sibs.length) sibs[sibs.length - 1].after(item);
+    };
+    const upH = () => {
+      const was = lifted, moved = dragged; cleanup();
+      if (!was) return; item._held = true; handle._held = true; setTimeout(() => { item._held = false; handle._held = false; }, 400);
+      if (moved) { saveOrder([...container.querySelectorAll(':scope > ' + selector)].map(el => el.dataset.key)); toast('Order saved'); }
+      else showHoldMenu(handle, menu);
+    };
+    function cleanup() { clearTimeout(timer); holdDrag = false; item.classList.remove('dragging'); removeEventListener('pointermove', mv); removeEventListener('pointerup', upH); removeEventListener('pointercancel', upH); }
+    addEventListener('pointermove', mv); addEventListener('pointerup', upH); addEventListener('pointercancel', upH);
+  });
+}
+function showHoldMenu(anchor, items) {
+  closePop(); pop = document.createElement('div'); pop.className = 'pop';
+  items.forEach(([label, fn, danger]) => { const b = document.createElement('button'); b.className = 'opt' + (danger ? ' danger' : ''); b.textContent = label;
+    b.onclick = () => { if (danger && !b.dataset.sure) { b.dataset.sure = 1; b.textContent = 'Tap again: ' + label.toLowerCase(); return; } closePop(); fn(); }; pop.appendChild(b); });
+  const c = document.createElement('button'); c.className = 'opt'; c.textContent = 'Cancel'; c.onclick = closePop; pop.appendChild(c);
+  const tip = document.createElement('p'); tip.className = 'phelp'; tip.textContent = 'Tip: hold and drag to move it.'; pop.appendChild(tip);
+  document.body.appendChild(pop); const r = anchor.getBoundingClientRect();
+  pop.style.top = Math.max(8, Math.min(r.bottom + 6, innerHeight - pop.offsetHeight - 8)) + 'px'; pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + 'px'; pop.style.right = 'auto';
 }
 function renderTrash(body) {
   const list = NAMES.trash.slice().sort((a, b) => b.at - a.at);
@@ -415,7 +459,21 @@ function paint() {
   colorBtns.forEach((b, i) => b.classList.toggle('on', COLORS[i] === t.c)); sizeBtns.forEach((b, i) => b.classList.toggle('on', i === t.sz));
   Object.entries(toolBtns).forEach(([k, b]) => b.classList.toggle('on', k === t.t)); toolBtns.pen.classList.toggle('auto', !!t.auto); store.put('kv', 'tool', { ...t }).catch(() => {});
 }
-$('#file').addEventListener('change', e => { const f = e.target.files[0]; if (f) (f.type.startsWith('image/') ? A.insertImage(f) : A.importPdf(f)); e.target.value = ''; });
+$('#file').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  if (f.type.startsWith('image/')) return A.insertImage(f);
+  const target = A, n = await target.pdfPages(f).catch(() => 0); if (!n) return target.importPdf(f);
+  const w = document.createElement('div'); w.className = 'modalWrap';
+  w.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="pdH"><h2 id="pdH">${esc(f.name)}</h2><p class="help">${n} page${n > 1 ? 's' : ''}</p>
+    <div class="row"><button class="primary" id="pdPages">Add as pages to write on</button></div>
+    <div class="row"><button id="pdPic">Place a page on this page as a picture</button>${n > 1 ? `<label class="tog small" for="pdN">Page <input id="pdN" type="number" min="1" max="${n}" value="1" style="width:70px"></label>` : ''}</div>
+    <p class="help">A picture can be moved and resized with your finger or pen. Pages fill the board so you can write on them.</p>
+    <div class="row"><button id="pdNo">Cancel</button></div></div>`;
+  document.body.appendChild(w); const q = s => w.querySelector(s);
+  q('#pdNo').onclick = () => w.remove();
+  q('#pdPages').onclick = () => { w.remove(); target.importPdf(f); };
+  q('#pdPic').onclick = async () => { const pn = n > 1 ? +q('#pdN').value || 1 : 1; w.remove(); toast('Placing the page…'); target.insertImage(await target.pdfPageImage(f, pn)); };
+});
 let pop = null;
 function closePop() { if (pop) { pop.remove(); pop = null; } }
 function placePop(anchor) {
@@ -840,10 +898,30 @@ function drawContent(ctx) {
   else { const r = R($('#board')); ctx.save(); ctx.beginPath(); ctx.roundRect(r.left, r.top, r.width, r.height, $('#pane2').hidden ? [0, 0, 16, 16] : [0, 0, 0, 16]); ctx.clip(); ctx.drawImage($('#ink'), r.left, r.top, r.width, r.height); ctx.restore(); }
   if (!$('#pane2').hidden) {
     const p = R($('#pane2')), r = R($('#board2')), bar = R(document.querySelector('.p2bar'));
-    ctx.fillStyle = '#2a2550'; ctx.fillRect(p.left - 3, p.top, 3, p.height);
+    const dv = R($('#divider')); ctx.fillStyle = '#16142a'; ctx.fillRect(dv.left, dv.top, dv.width, dv.height); ctx.fillStyle = '#2a2550'; ctx.fillRect(dv.left + 5, dv.top, 4, dv.height);
     ctx.fillStyle = '#16142a'; ctx.fillRect(bar.left, bar.top, bar.width, bar.height);
     const sel = $('#p2sheet'); ctx.fillStyle = '#F2B53A'; ctx.font = '700 13px "Space Grotesk", sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText(sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '', bar.left + 12, bar.top + bar.height / 2);
     ctx.save(); ctx.beginPath(); ctx.roundRect(r.left, r.top, r.width, r.height, [0, 0, 16, 0]); ctx.clip(); ctx.drawImage($('#ink2'), r.left, r.top, r.width, r.height); ctx.restore();
   }
 }
+
+$('#p2del').onclick = async e => {
+  const b = e.currentTarget, t = sheetHost(), list = await sheetsFor(t), id = $('#p2sheet').value, cur = list.find(x => x.id === id); if (!cur) return;
+  if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = 'Delete?'; b.classList.add('danger'); setTimeout(() => { b.dataset.sure = ''; b.textContent = '🗑'; b.classList.remove('danger'); }, 3000); return; }
+  b.dataset.sure = ''; b.textContent = '🗑'; b.classList.remove('danger');
+  await B2.flush(); await purgeNotes(id); const rest = list.filter(x => x.id !== id); await store.put('kv', 'sheets:' + t.id, rest);
+  toast(`"${cur.name}" deleted`);
+  if (rest.length) await loadSheet(rest[0].id); else await closeSplit();
+};
+/* divider between the two windows: hold and drag left or right */
+(() => {
+  const dv = $('#divider'); let saved = 0.5;
+  store.get('kv', 'splitW').then(v => { if (v) { saved = v; $('#panes').style.setProperty('--p2', (v * 100) + '%'); } }).catch(() => {});
+  dv.addEventListener('pointerdown', e => {
+    e.preventDefault(); try { dv.setPointerCapture(e.pointerId); } catch (_) {} dv.classList.add('drag');
+    const mv = ev => { const r = $('#panes').getBoundingClientRect(); saved = Math.max(.2, Math.min(.8, (r.right - ev.clientX) / r.width)); $('#panes').style.setProperty('--p2', (saved * 100) + '%'); };
+    const end = () => { dv.removeEventListener('pointermove', mv); dv.removeEventListener('pointerup', end); dv.removeEventListener('pointercancel', end); dv.classList.remove('drag'); store.put('kv', 'splitW', saved).catch(() => {}); };
+    dv.addEventListener('pointermove', mv); dv.addEventListener('pointerup', end); dv.addEventListener('pointercancel', end);
+  });
+})();
