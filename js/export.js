@@ -8,11 +8,11 @@ export function lib() {
   });
   return jsp;
 }
-export async function notesPdf(indexes, label, progress) {
+export async function notesPdf(indexes, label, progress, inst = board) {
   const JsPDF = await lib(); let doc = null;
   for (let n = 0; n < indexes.length; n++) {
     progress && progress(n, indexes.length);
-    const c = await board.renderPage(indexes[n], 1500);
+    const c = await inst.renderPage(indexes[n], 1500);
     const w = 595, h = Math.round(595 * c.height / c.width);
     if (!doc) doc = new JsPDF({ unit: 'pt', format: [w, h], orientation: h >= w ? 'portrait' : 'landscape', compress: true });
     else doc.addPage([w, h], h >= w ? 'portrait' : 'landscape');

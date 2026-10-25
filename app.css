@@ -224,3 +224,18 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .meter.big{width:220px;height:8px;border-radius:4px;display:inline-block}
 .rail .codeb{color:var(--cy);background:rgba(92,225,255,.1);box-shadow:inset 0 0 0 1.5px rgba(92,225,255,.5)}
 .rail .codeb.on{background:rgba(92,225,255,.25)}
+
+/* two windows side by side */
+#panes{flex:1;display:flex;min-height:0;gap:3px;background:#2a2550;border-radius:0 0 16px 16px;overflow:hidden}
+#panes>#board,#panes>#ide,#panes>#pane2{flex:1 1 0;min-width:0;border-radius:0}
+#pane2{display:flex;flex-direction:column;background:var(--board)}
+#pane2[hidden]{display:none!important}
+.p2bar{display:flex;align-items:center;gap:6px;padding:5px 8px;background:#16142a;border-bottom:1px solid var(--line)}
+.p2bar select{font:600 13px var(--display);color:var(--ink);background:#0b0726;border:1px solid var(--line);border-radius:8px;padding:5px 8px;max-width:50%}
+#p2pg{margin-left:auto;font:700 11px var(--mono);color:var(--muted)}
+#board2{flex:1;position:relative;overflow:hidden;touch-action:none;min-height:0}
+#ink2{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+.split .act{box-shadow:inset 0 3px 0 var(--cy)}
+
+.dh{cursor:grab;color:var(--muted);font-size:18px;padding:0 4px;touch-action:none;-webkit-user-select:none;user-select:none}
+.dragging{opacity:.75;outline:2px dashed var(--cy);outline-offset:2px}

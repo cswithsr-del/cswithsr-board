@@ -46,10 +46,10 @@ const pid = () => Math.random().toString(36).slice(2, 10);
 const dayStr = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
 function newPage(style) {
   const base = style || (() => { for (let i = curPage; i >= 0; i--) if (pages[i] && pages[i].k !== 'pdf') return { bg: pages[i].bg, pat: pages[i].pat }; return opts.style(); })();
-  return { id: pid(), k: 'note', bg: base.bg, pat: base.pat, h: A4, s: [] };
+  return { id: pid(), k: 'note', bg: base.bg, pat: base.pat, h: A4, s: [], im: [] };
 }
 function normPage(p) {
-  const q = { id: p.id || pid(), k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s || [] };
+  const q = { id: p.id || pid(), k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s || [], im: (p.im || []).map(o => ({ ...o })) };
   if (LEGACY[q.k]) { q.bg = LEGACY[q.k][0]; q.pat = LEGACY[q.k][1]; q.k = 'note'; }
   if (q.k !== 'pdf') { q.k = 'note'; q.bg = q.bg || '#0f0f13'; q.pat = q.pat || 'lined'; }
   return q;
@@ -100,7 +100,7 @@ function saveNow() {
   const strokes = pages.reduce((a, p) => a + p.s.length, 0);
   store.put('kv', 'm:' + topic.id, { pages: pages.length, strokes, updated: Date.now() }).catch(() => {});
   return store.put('topics', topic.id, { id: topic.id, pdfs: pdfDocs.length, sy: view.sy, updated: Date.now(), strokes, today: { day: dayStr(), ids: [...touched] },
-    pages: pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0 })) })) });
+    pages: pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0 })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h })) })) });
 }
 
 /* ---- geometry ---- */
@@ -137,6 +137,32 @@ export function shapePts(kind, x0, y0, x1, y1) {
   if (kind === 'tri') return [[(x0 + x1) / 2, y0], [x1, y1], [x0, y1], [(x0 + x1) / 2, y0]];
   return ellipsePts((x0 + x1) / 2, (y0 + y1) / 2, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2);
 }
+const quad = (a, c, b, n = 18) => { const o = []; for (let i = 0; i <= n; i++) { const t = i / n, u = 1 - t; o.push([u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]]); } return o; };
+const circ = (cx, cy, r) => { const o = []; for (let i = 0; i <= 28; i++) { const a = i / 28 * Math.PI * 2; o.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); } return o; };
+// Logic gates drawn inside the box you drag (inputs on the left, output on the right)
+function gateParts(kind, x0, y0, x1, y1) {
+  const L = Math.min(x0, x1), T = Math.min(y0, y1), w = Math.abs(x1 - x0) || 1, h = Math.abs(y1 - y0) || 1;
+  const X = f => L + f * w, Y = f => T + f * h, r = Math.max(3, Math.min(w, h) * .07), parts = [];
+  const bubble = tx => { parts.push(circ(X(tx) + r, Y(.5), r)); parts.push([[X(tx) + 2 * r, Y(.5)], [X(1), Y(.5)]]); };
+  if (kind === 'not') {
+    parts.push([[X(.22), Y(.1)], [X(.22), Y(.9)], [X(.75), Y(.5)], [X(.22), Y(.1)]]); parts.push([[X(0), Y(.5)], [X(.22), Y(.5)]]); bubble(.75); return parts;
+  }
+  if (kind === 'and' || kind === 'nand') {
+    const body = [[X(.5), Y(0)], [X(.2), Y(0)], [X(.2), Y(1)], [X(.5), Y(1)]];
+    for (let i = 0; i <= 24; i++) { const a = Math.PI / 2 - i / 24 * Math.PI; body.push([X(.5) + .32 * w * Math.cos(a), Y(.5) + .5 * h * Math.sin(a)]); }
+    parts.push(body); parts.push([[X(0), Y(.28)], [X(.2), Y(.28)]], [[X(0), Y(.72)], [X(.2), Y(.72)]]);
+    if (kind === 'nand') bubble(.82); else parts.push([[X(.82), Y(.5)], [X(1), Y(.5)]]);
+    return parts;
+  }
+  // or, nor, xor
+  const top = quad([X(.15), Y(0)], [X(.6), Y(0)], [X(.85), Y(.5)]), bot = quad([X(.15), Y(1)], [X(.6), Y(1)], [X(.85), Y(.5)]), back = quad([X(.15), Y(1)], [X(.32), Y(.5)], [X(.15), Y(0)]);
+  parts.push([...top, ...bot.reverse(), ...back]);
+  const inX = kind === 'xor' ? .14 : .22; parts.push([[X(0), Y(.28)], [X(inX), Y(.28)]], [[X(0), Y(.72)], [X(inX), Y(.72)]]);
+  if (kind === 'xor') parts.push(quad([X(.07), Y(0)], [X(.24), Y(.5)], [X(.07), Y(1)]));
+  if (kind === 'nor') bubble(.85); else parts.push([[X(.85), Y(.5)], [X(1), Y(.5)]]);
+  return parts;
+}
+export function shapeParts(kind, x0, y0, x1, y1) { return ['and', 'nand', 'or', 'nor', 'xor', 'not'].includes(kind) ? gateParts(kind, x0, y0, x1, y1) : [shapePts(kind, x0, y0, x1, y1)]; }
 function rdp(pts, eps) {
   if (pts.length < 3) return pts.slice();
   const [a, b] = [pts[0], pts[pts.length - 1]]; let dmax = 0, idx = 0;
@@ -197,6 +223,15 @@ function drawPageBg(p, top, c = ctx, live = true) {
     for (let y = 40; y < p.h; y += 40) for (let x = 40; x < DOCW; x += 40) c.fillRect(x - 1.2, top + y - 1.2, 2.4, 2.4);
   }
 }
+const imgCache = new Map();
+function loadImg(key) {
+  if (imgCache.has(key)) return imgCache.get(key);
+  const p = store.get('blobs', 'img:' + key).then(blob => new Promise(ok => { if (!blob) return ok(null); const im = new Image(); im.onload = () => { p.img = im; ok(im); req(); }; im.onerror = () => ok(null); im.src = URL.createObjectURL(blob); }));
+  imgCache.set(key, p); return p;
+}
+function drawImages(p, c) {
+  for (const o of p.im || []) { const pr = loadImg(o.key); if (pr.img) c.drawImage(pr.img, o.x, o.y, o.w, o.h); else { c.fillStyle = 'rgba(255,255,255,.06)'; c.fillRect(o.x, o.y, o.w, o.h); } }
+}
 function drawStroke(st, c = ctx) { c.strokeStyle = st.c; c.globalAlpha = st.t === 'hl' ? .38 : 1; for (const g of st.g) { c.lineWidth = g.w; c.stroke(g.p); } c.globalAlpha = 1; }
 function selBox() { const s = sel, pad = 10; return [s.bb[0] - pad, s.bb[1] - pad + tops[pages.indexOf(s.page)], s.bb[2] + pad, s.bb[3] + pad + tops[pages.indexOf(s.page)]]; }
 function draw() {
@@ -207,8 +242,10 @@ function draw() {
   pages.forEach((p, i) => {
     const t = tops[i]; if (t > y1 || t + p.h < y0) return;
     drawPageBg(p, t); ctx.save(); ctx.beginPath(); ctx.rect(0, t, DOCW, p.h); ctx.clip(); ctx.translate(0, t);
+    drawImages(p, ctx);
     for (const st of p.s) drawStroke(st);
     if (live && live.page === p && live.st) drawStroke(live.st);
+    if (live && live.page === p && live.sts) live.sts.forEach(s => drawStroke(s));
     ctx.restore();
   });
   if (live && live.mode === 'lasso' && live.path.length > 1) {
@@ -269,7 +306,7 @@ export async function importPdf(file) {
     await store.put('blobs', 'pdf:' + topic.id + ':' + d, buf);
     const fresh = pages.length === 1 && pages[0].s.length === 0 && pages[0].k !== 'pdf';
     const add = [];
-    for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); add.push({ id: pid(), k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
+    for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); add.push({ id: pid(), im: [], k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
     let at; if (fresh) { pages = add; at = 0; } else { at = curPage + 1; pages.splice(at, 0, ...add); }
     layout(); view.sy = tops[at] - GAP; view.z = 1; clampView(); req(); save(); opts.hint(false);
     opts.toast(doc.numPages + ' pages added'); return d;
@@ -282,15 +319,17 @@ function reportSel() {
   if (!opts) return;
   if (!sel || !pages.includes(sel.page)) { sel = null; opts.selection && opts.selection(null); return; }
   const [a, b, c, d] = selBox(), r = cv.getBoundingClientRect(), s = sc();
-  opts.selection && opts.selection({ left: r.left + (a - view.sx) * s, top: r.top + (b - view.sy) * s, right: r.left + (c - view.sx) * s, bottom: r.top + (d - view.sy) * s, count: sel.items.length });
+  opts.selection && opts.selection({ left: r.left + (a - view.sx) * s, top: r.top + (b - view.sy) * s, right: r.left + (c - view.sx) * s, bottom: r.top + (d - view.sy) * s, count: sel.items.length + (sel.imgs || []).length });
 }
-function selBB() { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const st of sel.items) { a = Math.min(a, st.bb[0] - st.w / 2); b = Math.min(b, st.bb[1] - st.w / 2); c = Math.max(c, st.bb[2] + st.w / 2); d = Math.max(d, st.bb[3] + st.w / 2); } sel.bb = [a, b, c, d]; }
+function selBB() { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const st of sel.items) { a = Math.min(a, st.bb[0] - st.w / 2); b = Math.min(b, st.bb[1] - st.w / 2); c = Math.max(c, st.bb[2] + st.w / 2); d = Math.max(d, st.bb[3] + st.w / 2); }
+  for (const o of sel.imgs || []) { a = Math.min(a, o.x); b = Math.min(b, o.y); c = Math.max(c, o.x + o.w); d = Math.max(d, o.y + o.h); } sel.bb = [a, b, c, d]; }
 function inPoly(x, y, poly) { let ins = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi + 1e-9) + xi) ins = !ins; } return ins; }
 function finishLasso(path, page) {
   const top = tops[pages.indexOf(page)], poly = path.map(([x, y]) => [x, y - top]); const items = [];
   if (poly.length > 2) for (const st of page.s) { const P = st.p, n = P.length / 3; let inside = 0; for (let i = 0; i < n; i++) if (inPoly(P[i * 3], P[i * 3 + 1], poly)) inside++; if (inside / n >= .6) items.push(st); }
-  if (!items.length) { setSel(null); return; }
-  sel = { page, items }; selBB(); setSel(sel);
+  const imgs = poly.length > 2 ? (page.im || []).filter(o => inPoly(o.x + o.w / 2, o.y + o.h / 2, poly)) : [];
+  if (!items.length && !imgs.length) { setSel(null); return; }
+  sel = { page, items, imgs }; selBB(); setSel(sel);
 }
 function hitSel(x, y) {
   if (!sel || !pages.includes(sel.page)) return null; const [a, b, c, d] = selBox(), h = 22 / sc();
@@ -299,10 +338,16 @@ function hitSel(x, y) {
   if (x >= a && x <= c && y >= b && y <= d) return { kind: 'move' };
   return null;
 }
-export function selDelete() { if (!sel) return; const page = sel.page, items = sel.items.map(st => ({ st, i: page.s.indexOf(st) })); page.s = page.s.filter(st => !sel.items.includes(st)); undo.push({ t: 'erase', items: items.map(o => ({ page, st: o.st, i: o.i })) }); redo = []; touched.add(page.id); setSel(null); save(); }
+function snapUndo(page, fn) { const s0 = page.s.slice(), i0 = (page.im || []).slice(); fn(); undo.push({ t: 'snap', page, s0, i0, s1: page.s.slice(), i1: (page.im || []).slice() }); redo = []; touched.add(page.id); save(); }
+export function selDelete() { if (!sel) return; const S = sel; snapUndo(S.page, () => { S.page.s = S.page.s.filter(st => !S.items.includes(st)); S.page.im = (S.page.im || []).filter(o => !(S.imgs || []).includes(o)); }); setSel(null); }
 export function selDuplicate() {
-  if (!sel) return; const page = sel.page; const copies = sel.items.map(st => { const n = { t: st.t, c: st.c, w: st.w, sh: st.sh, p: st.p.map((v, i) => i % 3 === 2 ? v : +(v + 24).toFixed(2)) }; build(n); return n; });
-  page.s.push(...copies); undo.push({ t: 'addmany', page, sts: copies }); redo = []; sel = { page, items: copies }; selBB(); setSel(sel); save();
+  if (!sel) return; const page = sel.page; let copies, ic;
+  snapUndo(page, () => {
+    copies = sel.items.map(st => { const n = { t: st.t, c: st.c, w: st.w, sh: st.sh, p: st.p.map((v, i) => i % 3 === 2 ? v : +(v + 24).toFixed(2)) }; build(n); return n; });
+    ic = (sel.imgs || []).map(o => ({ ...o, id: pid(), x: o.x + 24, y: o.y + 24 }));
+    page.s.push(...copies); page.im = [...(page.im || []), ...ic];
+  });
+  sel = { page, items: copies, imgs: ic }; selBB(); setSel(sel);
 }
 export function selRecolor(c) { if (!sel) return false; const before = sel.items.map(st => st.c); sel.items.forEach(st => st.c = c); undo.push({ t: 'color', items: sel.items.slice(), before, after: sel.items.map(() => c) }); redo = []; req(); save(); return true; }
 export function clearSel() { setSel(null); }
@@ -336,14 +381,14 @@ function down(e) {
     if (m === 'erase') { live = { mode: 'erase', id: e.pointerId, hits: [], snap: new Map() }; eraseAt(x, y); return; }
     if (m === 'lasso') {
       const h = hitSel(x, y);
-      if (h) { live = { mode: 'xform', id: e.pointerId, h, x0: x, y0: y, orig: sel.items.map(st => ({ st, p: st.p.slice(), w: st.w })) }; return; }
+      if (h) { live = { mode: 'xform', id: e.pointerId, h, x0: x, y0: y, orig: sel.items.map(st => ({ st, p: st.p.slice(), w: st.w })), oimg: (sel.imgs || []).map(o => ({ o, r: [o.x, o.y, o.w, o.h] })) }; return; }
       const pg = pageAt(y); if (pg < 0) { setSel(null); return; }
       setSel(null); live = { mode: 'lasso', id: e.pointerId, page: pages[pg], path: [[x, y]] }; req(); return;
     }
     if (sel) setSel(null);
     const pg = pageAt(y); if (pg < 0) return;
     const page = pages[pg], ly = y - tops[pg];
-    if (m === 'shape') { const st = { t: 'pen', c: tool.c, w: SIZES[tool.sz], sh: 1, p: flat([[x, ly], [x, ly]]) }; build(st); live = { mode: 'shape', id: e.pointerId, page, st, x0: x, y0: ly }; opts.hint(false); req(); return; }
+    if (m === 'shape') { live = { mode: 'shape', id: e.pointerId, page, sts: [], x0: x, y0: ly, x1: x, y1: ly }; opts.hint(false); req(); return; }
     const st = { t: m === 'hl' ? 'hl' : 'pen', c: m === 'hl' ? hlColor() : tool.c, w: m === 'hl' ? SIZES[tool.sz] * 4.2 : SIZES[tool.sz], p: [] };
     const pr = e.pointerType === 'pen' ? (e.pressure || .5) : .5;
     live = { mode: 'draw', id: e.pointerId, page, st, pp: pr };
@@ -382,13 +427,13 @@ function move(e) {
       if (live.mode === 'xform') { xform(x, y); continue; }
       const ly = y - tops[pages.indexOf(live.page)];
       if (live.mode === 'shape') { let x1 = x, y1 = ly; if (tool.shape === 'line' || tool.shape === 'arrow') { const ang = Math.atan2(y1 - live.y0, x1 - live.x0); const sn = Math.round(ang / (Math.PI / 4)) * Math.PI / 4; if (Math.abs(ang - sn) < .06) { const L = Math.hypot(x1 - live.x0, y1 - live.y0); x1 = live.x0 + L * Math.cos(sn); y1 = live.y0 + L * Math.sin(sn); } }
-        live.st.p = flat(shapePts(tool.shape, live.x0, live.y0, x1, y1)); continue; }
+        live.x1 = x1; live.y1 = y1; live.sts = shapeParts(tool.shape, live.x0, live.y0, x1, y1).map(pts => { const st = { t: 'pen', c: tool.c, w: SIZES[tool.sz], sh: 1, p: flat(pts) }; build(st); return st; }); continue; }
       const P = live.st.p, n = P.length, dx = x - P[n - 3], dy = ly - P[n - 2];
       if (dx * dx + dy * dy < (0.35 / view.z) ** 2) continue;
       let pr = ev.pointerType === 'pen' ? (ev.pressure || live.pp) : .5; pr = live.pp * .55 + pr * .45; live.pp = pr;
       P.push(+x.toFixed(2), +ly.toFixed(2), +pr.toFixed(3));
     }
-    if (live.mode === 'draw' || live.mode === 'shape') build(live.st);
+    if (live.mode === 'draw') build(live.st);
     req(); return;
   }
   const t = touches.get(e.pointerId); if (!t) return;
@@ -410,10 +455,12 @@ function xform(x, y) {
   if (L.h.kind === 'move') {
     const dx = x - L.x0, dy = y - L.y0;
     for (const o of L.orig) { o.st.p = o.p.map((v, i) => i % 3 === 0 ? +(v + dx).toFixed(2) : i % 3 === 1 ? +(v + dy).toFixed(2) : v); build(o.st); }
+    for (const q of L.oimg || []) { q.o.x = q.r[0] + dx; q.o.y = q.r[1] + dy; }
   } else {
     const top = tops[pages.indexOf(page)], { ox, oy, cx, cy } = L.h, ly = y - top;
     const d0 = Math.hypot(cx - ox, cy - oy) || 1, d1 = Math.hypot(x - ox, ly - oy); const k = Math.max(.1, Math.min(8, d1 / d0));
     for (const o of L.orig) { o.st.p = o.p.map((v, i) => i % 3 === 0 ? +(ox + (v - ox) * k).toFixed(2) : i % 3 === 1 ? +(oy + (v - oy) * k).toFixed(2) : v); o.st.w = +(o.w * Math.sqrt(k)).toFixed(2); build(o.st); }
+    for (const q of L.oimg || []) { q.o.x = ox + (q.r[0] - ox) * k; q.o.y = oy + (q.r[1] - oy) * k; q.o.w = q.r[2] * k; q.o.h = q.r[3] * k; }
   }
   selBB();
 }
@@ -425,10 +472,10 @@ function up(e) {
       if (tool.auto && L.st.t === 'pen') recognise(L.st);
       touched.add(L.page.id); L.page.s.push(L.st); undo.push({ t: 'add', page: L.page, st: L.st }); redo = []; save();
     }
-    if (L.mode === 'shape') { const [a, b, c, d] = L.st.bb; if (Math.hypot(c - a, d - b) > 4) { touched.add(L.page.id); L.page.s.push(L.st); undo.push({ t: 'add', page: L.page, st: L.st }); redo = []; save(); } }
+    if (L.mode === 'shape' && L.sts.length && Math.hypot(L.x1 - L.x0, L.y1 - L.y0) > 4) { touched.add(L.page.id); L.page.s.push(...L.sts); undo.push({ t: 'addmany', page: L.page, sts: L.sts }); redo = []; save(); }
     if (L.mode === 'erase') finishErase(L);
     if (L.mode === 'lasso') finishLasso(L.path, L.page);
-    if (L.mode === 'xform') { undo.push({ t: 'xform', items: L.orig.map(o => ({ st: o.st, before: [o.p, o.w], after: [o.st.p, o.st.w] })) }); redo = []; touched.add(sel.page.id); save(); reportSel(); }
+    if (L.mode === 'xform') { undo.push({ t: 'xform', items: L.orig.map(o => ({ st: o.st, before: [o.p, o.w], after: [o.st.p, o.st.w] })), imgs: (L.oimg || []).map(q => ({ o: q.o, before: q.r, after: [q.o.x, q.o.y, q.o.w, q.o.h] })) }); redo = []; touched.add(sel.page.id); save(); reportSel(); }
     live = null; penDown = false; lastPenUp = performance.now(); req(); return;
   }
   const t = touches.get(e.pointerId); if (!t) return; touches.delete(e.pointerId);
@@ -512,7 +559,8 @@ function apply(a, dir) {
   }
   else if (a.t === 'clear') a.page.s = fwd ? [] : a.old;
   else if (a.t === 'strokes') a.items.forEach(it => it.page.s = (fwd ? it.after : it.before).slice());
-  else if (a.t === 'xform') for (const it of a.items) { const [p, w] = fwd ? it.after : it.before; it.st.p = p; it.st.w = w; build(it.st); }
+  else if (a.t === 'xform') { for (const it of a.items) { const [p, w] = fwd ? it.after : it.before; it.st.p = p; it.st.w = w; build(it.st); } for (const it of a.imgs || []) { const r = fwd ? it.after : it.before; Object.assign(it.o, { x: r[0], y: r[1], w: r[2], h: r[3] }); } }
+  else if (a.t === 'snap') { a.page.s = (fwd ? a.s1 : a.s0).slice(); a.page.im = (fwd ? a.i1 : a.i0).slice(); }
   else if (a.t === 'color') a.items.forEach((st, i) => st.c = fwd ? a.after[i] : a.before[i]);
   else if (a.t === 'pages') { pages = fwd ? a.after.slice() : a.before.slice(); layout(); clampView(); }
   else if (a.t === 'style') a.items.forEach((it, i) => { const v = fwd ? a.after : it; it.page.bg = v.bg; it.page.pat = v.pat; });
@@ -564,6 +612,7 @@ export async function renderPage(i, W) {
     x.setTransform(k, 0, 0, k, 0, 0);
   } else { x.setTransform(k, 0, 0, k, 0, 0); drawPageBg(p, 0, x, false); }
   x.lineCap = 'round'; x.lineJoin = 'round';
+  for (const o of p.im || []) { const im = await loadImg(o.key); if (im) x.drawImage(im, o.x, o.y, o.w, o.h); }
   for (const st of p.s) drawStroke(st, x);
   return c;
 }
@@ -574,7 +623,7 @@ export const hasPdf = d => pages.some(p => p.k === 'pdf' && p.d === d);
 export async function replacePdf(file, oldD, remap) {
   const buf = await file.arrayBuffer(); const doc = await openPdf(buf); const d = pdfDocs.length; pdfDocs.push(doc);
   await store.put('blobs', 'pdf:' + topic.id + ':' + d, buf);
-  const fresh = []; for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); fresh.push({ id: pid(), k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
+  const fresh = []; for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); fresh.push({ id: pid(), im: [], k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
   const old = pages.filter(p => p.k === 'pdf' && p.d === oldD); const at = old.length ? pages.indexOf(old[0]) : pages.length;
   old.forEach((op, oi) => op.s.forEach(st => {
     const r = remap(oi, st) || { page: oi, dy: 0 }; const tgt = fresh[Math.max(0, Math.min(r.page, fresh.length - 1))];
@@ -587,3 +636,22 @@ export async function replacePdf(file, oldD, remap) {
   return d;
 }
 export const pageUnits = () => DOCW;
+
+// Insert a picture (a question, a diagram, a screenshot) on the current page. Move or resize it with the lasso.
+export async function insertImage(file) {
+  const page = pages[curPage]; if (!page) return;
+  const key = pid() + pid(); await store.put('blobs', 'img:' + key, file);
+  const im = await new Promise(ok => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ok(null); i.src = URL.createObjectURL(file); });
+  if (!im) { opts.toast('This picture could not be opened.'); return; }
+  const pr = Promise.resolve(im); pr.img = im; imgCache.set(key, pr);
+  let w = Math.min(DOCW * .8, im.naturalWidth), h = w * im.naturalHeight / im.naturalWidth;
+  if (h > page.h * .8) { h = page.h * .8; w = h * im.naturalWidth / im.naturalHeight; }
+  const midY = view.sy + view.H / sc() / 2 - tops[curPage];
+  const o = { id: pid(), key, x: (DOCW - w) / 2, y: Math.max(20, Math.min(page.h - h - 20, midY - h / 2)), w, h };
+  page.im = page.im || []; snapUndo(page, () => page.im.push(o));
+  tool.t = 'lasso'; opts.toolChanged && opts.toolChanged();
+  sel = { page, items: [], imgs: [o] }; selBB(); setSel(sel); opts.hint(false);
+  opts.toast('Picture added. Drag it to move, drag a gold corner to resize.');
+}
+export const pageCountNow = () => pages.length;
+export const _view = () => ({ ...view });

@@ -12,6 +12,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let cfg = { pageBg: '#0f0f13', pagePat: 'lined', finger: false, level: 'ol', last: null };
 let topic = null;
+let A = board, B2 = null, b2topic = null, selOwner = board;   // A = the window the side bars act on
 
 /* ---------- toast ---------- */
 let toastT = 0;
@@ -21,8 +22,23 @@ const saveCfg = () => store.put('kv', 'cfg', cfg).catch(() => {});
 /* ---------- topics ---------- */
 async function customTopics() { return (await store.get('kv', 'custom')) || []; }
 // Your own names for chapters and topics (notes stay linked to the original topic, so renaming never loses anything)
-let NAMES = { ch: {}, tp: {}, hide: [] };
-async function loadNames() { NAMES = Object.assign({ ch: {}, tp: {}, hide: [] }, (await store.get('kv', 'names')) || {}); }
+// trash: deleted chapters/subtopics (data kept until "Delete forever"); gone: deleted forever; order: your drag-and-drop order
+let NAMES = { ch: {}, tp: {}, hide: [], trash: [], gone: [], order: { ch: {}, tp: {} } };
+async function loadNames() {
+  NAMES = Object.assign({ ch: {}, tp: {}, hide: [], trash: [], gone: [], order: { ch: {}, tp: {} } }, (await store.get('kv', 'names')) || {});
+  NAMES.order = Object.assign({ ch: {}, tp: {} }, NAMES.order || {});
+  if (NAMES.hide.length) { for (const key of NAMES.hide) NAMES.trash.push({ kind: 'topic', key, name: NAMES.tp[key] || key.replace(/^\w+:/, '').replace(/-/g, ' '), at: Date.now() }); NAMES.hide = []; await saveNames(); }
+}
+const isOut = key => NAMES.trash.some(t => t.key === key) || NAMES.gone.includes(key);
+const chKey = (lv, n) => 'ch:' + baseOf(lv) + ':' + n;
+function sortedChapters(lv, p) {
+  const ord = NAMES.order.ch[baseOf(lv) + ':' + p.id] || [];
+  return p.chapters.filter(ch => !isOut(chKey(lv, ch.n))).map((ch, i) => [ch, ord.includes(ch.n) ? ord.indexOf(ch.n) : 1000 + i]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
+}
+function sortedNames(lv, ch, names) {
+  const ord = NAMES.order.tp[baseOf(lv) + ':' + ch.n] || [];
+  return names.map((n, i) => [n, ord.includes(nk(lv, n)) ? ord.indexOf(nk(lv, n)) : 1000 + i]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
+}
 const saveNames = () => store.put('kv', 'names', NAMES);
 const chName = (lv, ch) => NAMES.ch[baseOf(lv) + ':' + ch.n] || ch.name;
 const nk = (lv, name) => topicId(baseOf(lv), name);   // key for names, hiding and code (shared by both O Level batches)
@@ -30,9 +46,9 @@ const tpName = (id, name) => NAMES.tp[id] || name;
 let libEdit = false;
 async function allTopics() {
   const out = []; const custom = await customTopics();
-  for (const lv of LEVELS) for (const p of lv.papers) for (const ch of p.chapters) {
+  for (const lv of LEVELS) for (const p of lv.papers) for (const ch of sortedChapters(lv.id, p)) {
     const names = [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)];
-    for (const name of names) { const id = topicId(lv.id, name), key = nk(lv.id, name); if (NAMES.hide.includes(key)) continue; out.push({ id, orig: name, codeScope: 't:' + key, name: tpName(key, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
+    for (const name of names) { const id = topicId(lv.id, name), key = nk(lv.id, name); if (isOut(key)) continue; out.push({ id, orig: name, codeScope: 't:' + key, name: tpName(key, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
   }
   return out;
 }
@@ -60,7 +76,7 @@ async function openCodeLab(lv) {
   await board.flush();
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
   const L = LEVELS.find(l => l.id === lv);
-  codeCtx = { scope: lv, level: lv, label: 'Code Lab · ' + (lv === 'ol' ? 'O Level' : L.name) };
+  await closeSplit(); codeCtx = { scope: lv, level: lv, label: 'Code Lab · ' + (lv === 'ol' ? 'O Level' : L.name) };
   topic = codeTopic(lv); setHeader(codeCtx.label, topic.chips); $('#backCode').hidden = true; codeB.hidden = true;
   $('#lib').hidden = true; document.body.classList.remove('libopen'); setMode('code');
 }
@@ -111,7 +127,7 @@ async function backToCode() { if (!codeCtx) return; await board.flush(); topic =
 async function openTopic(t) {
   await board.flush();
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
-  codeCtx = null; $('#backCode').hidden = true; setMode('board');
+  await closeSplit(); codeCtx = null; $('#backCode').hidden = true; setMode('board');
   codeB.hidden = !hasCode(t); codeB.classList.remove('on');
   topic = t; cfg.last = t.id; saveCfg();
   // second O Level batch: offer to start from the other batch's pages
@@ -134,6 +150,7 @@ let libView = 'topics';
 async function showLib(fromBack) {
   if (fromBack !== true && history.state && history.state.v === 'board') { history.back(); return; }
   document.querySelectorAll('.modalWrap').forEach(m => m.remove());
+  board.clearSel(); if (B2) B2.clearSel(); selBar.hidden = true;
   await board.flush();
   $('#lib').hidden = false; document.body.classList.add('libopen'); renderLib();
 }
@@ -148,6 +165,7 @@ async function renderLib() {
     const m = metas[t.id];
     b.innerHTML = `<div><small>CONTINUE</small><strong>${esc(t.name)}</strong></div><span class="meta">${t.chapterName ? esc(t.levelName + ' · ' + t.chapterName) : ''}${m ? ' · ' + m.pages + (m.pages === 1 ? ' page' : ' pages') : ''}</span>`;
     b.onclick = () => openTopic(t); cont.appendChild(b); } }
+  $('#trashBtn').classList.toggle('primary', libView === 'trash');
   $('#recsBtn').classList.toggle('primary', libView === 'recs'); $('#upsBtn').classList.toggle('primary', libView === 'ups');
   if (libView === 'ups') { $('#tabs').hidden = true; $('#libbody').innerHTML = ''; $('#libsub').textContent = 'Files waiting for, or already sent to, Google Drive'; return renderUploads($('#libbody')); }
   const tabs = $('#tabs'), body = $('#libbody'); body.innerHTML = '';
@@ -157,7 +175,10 @@ async function renderLib() {
   LEVELS.forEach(lv => { const b = document.createElement('button'); b.role = 'tab'; b.textContent = lv.name; b.setAttribute('aria-selected', cfg.level === lv.id); b.onclick = () => { cfg.level = lv.id; saveCfg(); renderLib(); }; tabs.appendChild(b); });
   const q = $('#search').value.trim().toLowerCase();
   const custom = await customTopics(); await loadNames();
-  $('#editBtn').classList.toggle('primary', libEdit); $('#editBtn').textContent = libEdit ? 'Done editing' : 'Edit names';
+  $('#editBtn').classList.toggle('primary', libEdit); $('#editBtn').textContent = libEdit ? 'Done editing' : 'Edit';
+  $('#trashBtn').textContent = 'Trash' + (NAMES.trash.length ? ` (${NAMES.trash.length})` : '');
+  if (libView === 'trash') { tabs.hidden = true; $('#libsub').textContent = 'Deleted chapters and subtopics. Restore puts them back where they were.'; return renderTrash(body); }
+  if (libEdit) { const tip = document.createElement('p'); tip.className = 'help'; tip.textContent = 'Drag ⠿ to change the order. Rename or delete chapters and subtopics; deleted ones go to Trash.'; body.appendChild(tip); }
   const levels = q ? LEVELS : LEVELS.filter(l => l.id === cfg.level);
   if (!q && !libEdit) {
     const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + baseOf(lv.id) + ':')).length;
@@ -169,37 +190,40 @@ async function renderLib() {
   for (const lv of levels) for (const p of lv.papers) {
     const sec = document.createElement('section'); sec.className = 'paper';
     sec.innerHTML = `<h2>${esc(q ? lv.name + ' · ' : '')}${esc(p.name)}</h2>`; const grid = document.createElement('div'); grid.className = 'chgrid'; sec.appendChild(grid);
-    for (const ch of p.chapters) {
+    for (const ch of sortedChapters(lv.id, p)) {
       // old subtopics of merged chapters only show if they already have notes or recordings
       const legacy = (ch.legacy || []).filter(n => { const id = topicId(lv.id, n); return metas[id] || recCount[id]; });
-      const names = [...ch.topics, ...legacy, ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)];
+      const names = sortedNames(lv.id, ch, [...ch.topics, ...legacy, ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)]);
       const cName = chName(lv.id, ch);
-      const visible = names.filter(n => !NAMES.hide.includes(nk(lv.id, n)));
+      const visible = names.filter(n => !isOut(nk(lv.id, n)));
       const match = visible.filter(n => !q || tpName(nk(lv.id, n), n).toLowerCase().includes(q) || cName.toLowerCase().includes(q));
       if (q && !match.length) continue;
-      const card = document.createElement('div'); card.className = 'ch';
-      card.innerHTML = `<h3><b>${chLabel(ch)}</b><span class="cn">${esc(cName)}</span></h3>`;
+      const card = document.createElement('div'); card.className = 'ch'; card.dataset.key = ch.n;
+      card.innerHTML = `<h3>${libEdit ? '<span class="dh" aria-label="Drag to move this chapter">⠿</span>' : ''}<b>${chLabel(ch)}</b><span class="cn">${esc(cName)}</span></h3>`;
       if (libEdit) {
         const pen = document.createElement('button'); pen.className = 'mini'; pen.textContent = 'Rename'; card.querySelector('h3').appendChild(pen);
         pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = baseOf(lv.id) + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
+        const del = document.createElement('button'); del.className = 'mini danger'; del.textContent = 'Delete'; card.querySelector('h3').appendChild(del);
+        del.onclick = async () => { if (!del.dataset.sure) { del.dataset.sure = 1; del.textContent = 'Move to Trash?'; return; }
+          NAMES.trash.push({ kind: 'chapter', key: chKey(lv.id, ch.n), base: baseOf(lv.id), n: ch.n, paper: p.id, name: `${chLabel(ch)} ${cName}`, level: lv.name, at: Date.now() }); await saveNames(); toast('Chapter moved to Trash. Restore it from Trash with everything in it.'); renderLib(); };
+        dragSort(card.querySelector('.dh'), card, grid, '.ch', true, async keys => { NAMES.order.ch[baseOf(lv.id) + ':' + p.id] = keys.map(Number); await saveNames(); });
       }
       for (const orig of match) {
         const id = topicId(lv.id, orig), key = nk(lv.id, orig), name = tpName(key, orig), m = metas[id], rc = recCount[id] || 0; shown++;
-        const b = document.createElement(libEdit ? 'div' : 'button'); b.className = 'tp';
+        const b = document.createElement(libEdit ? 'div' : 'button'); b.className = 'tp'; b.dataset.key = key;
         const meta = [m ? m.pages + (m.pages === 1 ? ' PAGE' : ' PAGES') : '', rc ? rc + ' REC' : ''].filter(Boolean).join(' · ');
-        b.innerHTML = `<span class="nm">${esc(name)}</span><span class="mt ${m && m.strokes ? 'has' : ''}">${meta || 'NEW'}</span>`;
+        b.innerHTML = `${libEdit ? '<span class="dh" aria-label="Drag to move this subtopic">⠿</span>' : ''}<span class="nm">${esc(name)}</span><span class="mt ${m && m.strokes ? 'has' : ''}">${meta || 'NEW'}</span>`;
         if (libEdit) {
           const rn = document.createElement('button'); rn.className = 'mini'; rn.textContent = 'Rename';
           rn.onclick = () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[key] = v; else delete NAMES.tp[key]; await saveNames(); renderLib(); });
-          const hd = document.createElement('button'); hd.className = 'mini danger'; hd.textContent = 'Hide';
-          hd.onclick = async () => { NAMES.hide.push(key); await saveNames(); toast('Topic hidden. Its notes are kept; “Show hidden” brings it back.'); renderLib(); };
+          const hd = document.createElement('button'); hd.className = 'mini danger'; hd.textContent = 'Delete';
+          hd.onclick = async () => { if (!hd.dataset.sure) { hd.dataset.sure = 1; hd.textContent = 'Move to Trash?'; return; }
+            NAMES.trash.push({ kind: 'topic', key, base: baseOf(lv.id), ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); };
           b.append(rn, hd);
         } else b.onclick = () => openTopic({ id, orig, codeScope: 't:' + key, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id });
         card.appendChild(b);
+        if (libEdit) dragSort(b.querySelector('.dh'), b, card, '.tp', false, async keys => { NAMES.order.tp[baseOf(lv.id) + ':' + ch.n] = keys; await saveNames(); });
       }
-      const hidden = names.filter(n => NAMES.hide.includes(nk(lv.id, n)));
-      if (libEdit && hidden.length) { const sh = document.createElement('button'); sh.className = 'addt'; sh.textContent = `Show hidden (${hidden.length})`;
-        sh.onclick = async () => { NAMES.hide = NAMES.hide.filter(x => !hidden.some(n => nk(lv.id, n) === x)); await saveNames(); renderLib(); }; card.appendChild(sh); }
       if (!q) {
         const add = document.createElement('button'); add.className = 'addt'; add.textContent = '+ Add a topic';
         add.onclick = () => {
@@ -256,6 +280,59 @@ async function playRec(r) {
 $('#search').addEventListener('input', () => { libView = 'topics'; renderLib(); });
 $('#quick').onclick = () => openTopic(QUICK);
 $('#editBtn').onclick = () => { libEdit = !libEdit; libView = 'topics'; renderLib(); };
+$('#trashBtn').onclick = () => { libView = libView === 'trash' ? 'topics' : 'trash'; renderLib(); };
+// drag a ⠿ handle to reorder items inside their list (grid = chapters laid out in columns)
+function dragSort(handle, item, container, selector, grid, done) {
+  if (!handle) return; handle.style.touchAction = 'none';
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation(); item.classList.add('dragging');
+    const mv = ev => {
+      const sibs = [...container.querySelectorAll(':scope > ' + selector)].filter(x => x !== item); let target = null;
+      for (const s of sibs) { const r = s.getBoundingClientRect(); if (grid ? (ev.clientY < r.top || (ev.clientY <= r.bottom && ev.clientX < r.left + r.width / 2)) : ev.clientY < r.top + r.height / 2) { target = s; break; } }
+      if (target) { if (item.nextElementSibling !== target) container.insertBefore(item, target); } else if (sibs.length) sibs[sibs.length - 1].after(item);
+    };
+    // listen on the window: moving the item in the page would otherwise lose the pointer
+    const end = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', end); removeEventListener('pointercancel', end); item.classList.remove('dragging');
+      done([...container.querySelectorAll(':scope > ' + selector)].map(el => el.dataset.key)); };
+    addEventListener('pointermove', mv); addEventListener('pointerup', end); addEventListener('pointercancel', end);
+  });
+}
+function renderTrash(body) {
+  const list = NAMES.trash.slice().sort((a, b) => b.at - a.at);
+  if (!list.length) { body.innerHTML = '<p class="empty">Trash is empty. Deleted chapters and subtopics appear here, with all their notes and code.</p>'; return; }
+  const wrap = document.createElement('div'); wrap.className = 'recs';
+  for (const t of list) {
+    const row = document.createElement('div'); row.className = 'recrow';
+    row.innerHTML = `<div class="info"><strong>${esc(t.name)}</strong><span>${t.kind === 'chapter' ? 'Chapter' : 'Subtopic'}${t.level ? ' · ' + esc(t.level) : ''}${t.chapter ? ' · ' + esc(t.chapter) : ''} · deleted ${new Date(t.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span></div><div class="acts"></div>`;
+    const a = row.querySelector('.acts'); const mk = (txt, c, f) => { const b = document.createElement('button'); b.className = c; b.textContent = txt; b.onclick = f; a.appendChild(b); return b; };
+    mk('Restore', 'ghost primary', async () => { NAMES.trash = NAMES.trash.filter(x => x !== t); await saveNames(); toast('Restored to its old place'); renderLib(); });
+    const fx = mk('Delete forever', 'ghost danger', async () => {
+      if (!fx.dataset.sure) { fx.dataset.sure = 1; fx.textContent = 'Tap again: notes and code are erased'; return; }
+      await purge(t); NAMES.trash = NAMES.trash.filter(x => x !== t); NAMES.gone.push(t.key); await saveNames(); toast('Deleted forever. Recordings are kept in Recordings.'); renderLib();
+    });
+    wrap.appendChild(row);
+  }
+  body.appendChild(wrap);
+}
+// erase the notes, sheets, PDFs, pictures' pages and code of a subtopic (in both O Level batches), or of a whole chapter
+async function purgeNotes(id) {
+  for (const s of (await store.get('kv', 'sheets:' + id)) || []) await purgeNotes(s.id);
+  await store.del('topics', id); await store.del('kv', 'm:' + id); await store.delPrefix('blobs', 'pdf:' + id + ':'); await store.del('kv', 'sheets:' + id); await store.del('kv', 'sheetLast:' + id);
+}
+async function purgeTopic(base, orig, key) {
+  for (const v of base === 'ol' ? ['ol', 'olg'] : [base]) await purgeNotes(topicId(v, orig));
+  for (const p of ['cp:t:', 'cf:t:']) await store.delPrefix('kv', p + key + ':');
+  for (const k of ['ideInit:t:', 'ideLast:t:']) await store.del('kv', k + key);
+  for (const [id] of await store.getPrefix('topics', 'code:t:' + key + ':')) await purgeNotes(id);
+  await store.delPrefix('kv', 'annlay:code:t:' + key + ':');
+  const c = (await customTopics()).filter(x => !(x.lv === base && x.name === orig)); await store.put('kv', 'custom', c);
+}
+async function purge(t) {
+  if (t.kind === 'topic') { if (t.orig) await purgeTopic(t.base, t.orig, t.key); return; }
+  const lv = LEVELS.find(l => l.id === t.base), p = lv.papers.find(x => x.id === t.paper), ch = p && p.chapters.find(x => x.n === t.n); if (!ch) return;
+  const custom = await customTopics();
+  for (const orig of [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === t.base && inChapter(ch, c.ch)).map(c => c.name)]) await purgeTopic(t.base, orig, topicId(t.base, orig));
+}
 function inlineEdit(el, value, done) {
   const inp = document.createElement('input'); inp.value = value; inp.className = 'inl'; inp.setAttribute('aria-label', 'New name');
   el.replaceWith(inp); inp.focus(); inp.select(); let fin = false;
@@ -276,6 +353,7 @@ const IC = {
   shape: '<rect x="3" y="11" width="9" height="9" rx="1"/><circle cx="16.5" cy="7.5" r="4.5"/>',
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
   code: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/>',
+  split: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M12 4.5v15"/>',
   pen: '<path d="M4 20l4.5-1L19 8.5 15.5 5 5 15.5 4 20z"/><path d="M13.5 7l3.5 3.5"/>',
   hl: '<path d="M14.5 4.5l5 5-7.5 7.5h-5v-5z"/><path d="M7 17l-3 3h6"/>',
   erase: '<path d="M8 20h12"/><path d="M4.5 15.5l9-9 6 6-7.5 7.5H8.5z"/><path d="M9 11l6 6"/>',
@@ -306,22 +384,23 @@ const shareB = btn(L, svg('cloud'), 'Send this class to Drive', openShare);
 const codeB = btn(L, svg('code') + '<small>Code</small>', 'Code for this subtopic', () => toggleTopicCode()); codeB.classList.add('homeb', 'codeb'); codeB.hidden = true;
 hr(L);
 COLORS.forEach((c, i) => colorBtns.push(btn(L, `<span class="sw" style="background:${c}"></span>`, CNAMES[i] + ' ink', () => {
-  if (!$('#ide').hidden) { startAnnotate(); }
-  if (board.hasSel()) { board.selRecolor(c); return; }
+  if (!$('#ide').hidden && $('#pane2').hidden) { startAnnotate(); }
+  if (A.hasSel()) { A.selRecolor(c); return; }
   board.tool.c = c; if (['erase', 'laser', 'lasso'].includes(board.tool.t)) board.tool.t = 'pen'; paint(); })));
 hr(L);
 board.SIZES.forEach((s, i) => sizeBtns.push(btn(L, `<span class="dot" style="width:${5 + i * 4}px;height:${5 + i * 4}px"></span>`, ['Fine', 'Medium', 'Bold'][i] + ' line', () => { board.tool.sz = i; paint(); })));
 [['pen', 'Pen'], ['hl', 'Highlighter'], ['shape', 'Shapes'], ['lasso', 'Select and move'], ['erase', 'Eraser'], ['laser', 'Laser pointer']].forEach(([k, l]) => toolBtns[k] = btn(R, svg(k), l, () => {
-  if (!$('#ide').hidden) { startAnnotate(); }
+  if (!$('#ide').hidden && $('#pane2').hidden) { startAnnotate(); }
   if (k === 'shape' && board.tool.t === 'shape') return openShapePop(toolBtns.shape);
   if (k === 'erase' && board.tool.t === 'erase') return openEraserPop(toolBtns.erase);
-  board.tool.t = k; if (k !== 'lasso') board.clearSel(); paint(); if (k === 'shape') openShapePop(toolBtns.shape); if (k === 'erase') openEraserPop(toolBtns.erase); }));
+  board.tool.t = k; if (k !== 'lasso') A.clearSel(); paint(); if (k === 'shape') openShapePop(toolBtns.shape); if (k === 'erase') openEraserPop(toolBtns.erase); }));
 hr(R);
-btn(R, svg('undo'), 'Undo', board.doUndo); btn(R, svg('redo'), 'Redo', board.doRedo);
+btn(R, svg('undo'), 'Undo', () => A.doUndo()); btn(R, svg('redo'), 'Redo', () => A.doRedo());
 hr(R);
 const addBtn = btn(R, svg('page'), 'Pages', () => openPop(addBtn));
 btn(R, svg('grid'), 'Page overview', openOverview);
-btn(R, svg('pdf'), 'Open a PDF', () => $('#file').click());
+btn(R, svg('pdf'), 'Insert a PDF or picture', () => $('#file').click());
+const splitB = btn(R, svg('split'), 'Second window side by side', () => toggleSplit());
 hr(R);
 btn(R, svg('full'), 'Full screen', () => { const d = document; (d.fullscreenElement ? d.exitFullscreen() : d.documentElement.requestFullscreen({ navigationUI: 'hide' })).catch(() => toast('Full screen is not available here.')); });
 btn(R, svg('set'), 'Settings and help', openSettings);
@@ -329,14 +408,14 @@ btn(R, svg('hide'), 'Hide tools', () => document.body.classList.add('hidden-ui')
 $('#show').onclick = () => document.body.classList.remove('hidden-ui');
 function setMode(m) {
   const code = m === 'code'; $('#ide').hidden = !code; $('#board').hidden = code;
-  if (code) { board.clearSel(); ide.open(codeCtx ? codeCtx.scope : 'ol', codeCtx ? codeCtx.level : 'ol').then(() => ide.prewarm()); }
+  if (code) { A.clearSel(); ide.open(codeCtx ? codeCtx.scope : 'ol', codeCtx ? codeCtx.level : 'ol').then(() => ide.prewarm()); }
 }
 function paint() {
-  const t = board.tool;
+  const t = board.tool; if (B2) Object.assign(B2.tool, t);
   colorBtns.forEach((b, i) => b.classList.toggle('on', COLORS[i] === t.c)); sizeBtns.forEach((b, i) => b.classList.toggle('on', i === t.sz));
   Object.entries(toolBtns).forEach(([k, b]) => b.classList.toggle('on', k === t.t)); toolBtns.pen.classList.toggle('auto', !!t.auto); store.put('kv', 'tool', { ...t }).catch(() => {});
 }
-$('#file').addEventListener('change', e => { const f = e.target.files[0]; if (f) board.importPdf(f); e.target.value = ''; });
+$('#file').addEventListener('change', e => { const f = e.target.files[0]; if (f) (f.type.startsWith('image/') ? A.insertImage(f) : A.importPdf(f)); e.target.value = ''; });
 let pop = null;
 function closePop() { if (pop) { pop.remove(); pop = null; } }
 function placePop(anchor) {
@@ -346,7 +425,7 @@ function placePop(anchor) {
 const PAGE_ICONS = { lined: '<path d="M4 8h16M4 12h16M4 16h16"/>', grid: '<path d="M4 8h16M4 12h16M4 16h16M8 4v16M12 4v16M16 4v16"/>', dots: '<circle cx="8" cy="8" r=".6"/><circle cx="12" cy="8" r=".6"/><circle cx="16" cy="8" r=".6"/><circle cx="8" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="16" cy="12" r=".6"/><circle cx="8" cy="16" r=".6"/><circle cx="12" cy="16" r=".6"/><circle cx="16" cy="16" r=".6"/>', plain: '' };
 function openPop(anchor) {
   closePop(); pop = document.createElement('div'); pop.className = 'pop pagepop';
-  const cur = board.currentPage() || {}; const isPdf = cur.k === 'pdf';
+  const cur = A.currentPage() || {}; const isPdf = cur.k === 'pdf';
   const bg = isPdf ? cfg.pageBg : cur.bg, pat = isPdf ? cfg.pagePat : cur.pat;
   pop.innerHTML = `<button class="opt primary" id="pAdd">+ Add a page after this one</button>
     <div class="plabel">Page colour${isPdf ? ' (for new pages)' : ''}</div><div class="swrow" id="pCols"></div>
@@ -354,24 +433,26 @@ function openPop(anchor) {
     <label class="tog small"><input type="checkbox" id="pAll"> Apply to all my pages in this topic</label>
     <div class="prow"><button class="opt" id="pFit">Fit page width</button><button class="opt" id="pClear">Clear writing on this page</button></div>
     <div class="prow"><button class="opt danger" id="pDel">Delete this page</button>${isPdf ? '<button class="opt danger" id="pPdf">Remove this whole PDF</button>' : ''}</div>`;
-  const apply = (nb, np) => { cfg.pageBg = nb; cfg.pagePat = np; saveCfg(); if (!isPdf) board.setPageStyle({ bg: nb, pat: np }, pop.querySelector('#pAll').checked); closePop(); };
+  const apply = (nb, np) => { cfg.pageBg = nb; cfg.pagePat = np; saveCfg(); if (!isPdf) A.setPageStyle({ bg: nb, pat: np }, pop.querySelector('#pAll').checked); closePop(); };
   const cols = pop.querySelector('#pCols');
   board.PAGE_COLORS.forEach(([c, n]) => { const b = document.createElement('button'); b.className = 'psw' + (c === bg ? ' on' : ''); b.style.background = c; b.title = n; b.setAttribute('aria-label', n + ' page'); b.onclick = () => apply(c, pat); cols.appendChild(b); });
   const custom = document.createElement('label'); custom.className = 'psw custom'; custom.title = 'Any colour'; custom.innerHTML = '<input type="color" aria-label="Pick any page colour">+';
   custom.querySelector('input').value = /^#[0-9a-f]{6}$/i.test(bg) ? bg : '#0f0f13'; custom.querySelector('input').onchange = e => apply(e.target.value, pat); cols.appendChild(custom);
   const pats = pop.querySelector('#pPats');
   board.PATTERNS.forEach(([k, n]) => { const b = document.createElement('button'); b.className = 'ppat' + (k === pat ? ' on' : ''); b.innerHTML = `<svg viewBox="0 0 24 24">${PAGE_ICONS[k]}</svg><span>${n}</span>`; b.onclick = () => apply(bg, k); pats.appendChild(b); });
-  pop.querySelector('#pAdd').onclick = () => { board.addPage(isPdf ? { bg: cfg.pageBg, pat: cfg.pagePat } : null); closePop(); };
-  pop.querySelector('#pFit').onclick = () => { board.fit(); closePop(); };
-  pop.querySelector('#pClear').onclick = () => { if (board.clearPage()) toast('Page cleared. Undo brings it back.'); closePop(); };
-  pop.querySelector('#pDel').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { board.deletePage(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to delete'; } };
-  if (isPdf) pop.querySelector('#pPdf').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { board.removePdf(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to remove the PDF'; } };
+  pop.querySelector('#pAdd').onclick = () => { A.addPage(isPdf ? { bg: cfg.pageBg, pat: cfg.pagePat } : null); closePop(); };
+  pop.querySelector('#pFit').onclick = () => { A.fit(); closePop(); };
+  pop.querySelector('#pClear').onclick = () => { if (A.clearPage()) toast('Page cleared. Undo brings it back.'); closePop(); };
+  pop.querySelector('#pDel').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { A.deletePage(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to delete'; } };
+  if (isPdf) pop.querySelector('#pPdf').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { A.removePdf(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to remove the PDF'; } };
   placePop(anchor);
 }
+const GATES = [['and', 'AND', '<path d="M4 9h3M4 15h3M7 6h5a6 6 0 010 12H7z M18 12h3"/>'], ['nand', 'NAND', '<path d="M3 9h3M3 15h3M6 6h4.5a6 6 0 010 12H6z"/><circle cx="18" cy="12" r="1.6"/><path d="M19.6 12H22"/>'], ['or', 'OR', '<path d="M4 9h4M4 15h4M6 6c3 0 7 1 11 6-4 5-8 6-11 6 2-4 2-8 0-12zM17 12h4"/>'], ['nor', 'NOR', '<path d="M3 9h4M3 15h4M5 6c3 0 6 1 10 6-4 5-7 6-10 6 2-4 2-8 0-12z"/><circle cx="17" cy="12" r="1.6"/><path d="M18.6 12H22"/>'], ['xor', 'XOR', '<path d="M3 9h3M3 15h3M7 6c3 0 7 1 10 6-3 5-7 6-10 6 2-4 2-8 0-12zM4.5 6c2 4 2 8 0 12M17 12h4"/>'], ['not', 'NOT', '<path d="M3 12h4M7 6v12l9-6z"/><circle cx="17.6" cy="12" r="1.6"/><path d="M19.2 12H22"/>']];
 const SHAPES = [['line', 'Line', '<path d="M4 20L20 4"/>'], ['arrow', 'Arrow', '<path d="M4 20L20 4M11 4h9v9"/>'], ['rect', 'Rectangle', '<rect x="3.5" y="6" width="17" height="12" rx="1"/>'], ['ellipse', 'Circle / ellipse', '<ellipse cx="12" cy="12" rx="9" ry="7"/>'], ['tri', 'Triangle', '<path d="M12 4l9 16H3z"/>']];
 function openShapePop(anchor) {
   closePop(); pop = document.createElement('div'); pop.className = 'pop';
-  pop.innerHTML = '<div class="plabel">Draw a shape</div><div class="swrow" id="shp"></div><label class="tog small"><input type="checkbox" id="auto"> Auto-shape my pen: straightens lines and tidies circles, rectangles and triangles</label>';
+  pop.innerHTML = '<div class="plabel">Draw a shape</div><div class="swrow" id="shp"></div><div class="plabel">Logic gates</div><div class="swrow" id="gts"></div><label class="tog small"><input type="checkbox" id="auto"> Auto-shape my pen: straightens lines and tidies circles, rectangles and triangles</label>';
+  GATES.forEach(([k, n, ic]) => { const b = document.createElement('button'); b.className = 'ppat' + (board.tool.shape === k ? ' on' : ''); b.innerHTML = `<svg viewBox="0 0 24 24">${ic}</svg><span>${n}</span>`; b.onclick = () => { board.tool.shape = k; board.tool.t = 'shape'; paint(); closePop(); }; pop.querySelector('#gts').appendChild(b); });
   SHAPES.forEach(([k, n, ic]) => { const b = document.createElement('button'); b.className = 'ppat' + (board.tool.shape === k ? ' on' : ''); b.innerHTML = `<svg viewBox="0 0 24 24">${ic}</svg><span>${n}</span>`; b.onclick = () => { board.tool.shape = k; board.tool.t = 'shape'; paint(); closePop(); }; pop.querySelector('#shp').appendChild(b); });
   const au = pop.querySelector('#auto'); au.checked = !!board.tool.auto; au.onchange = () => { board.tool.auto = au.checked; paint(); toast(au.checked ? 'Auto-shape is on for the pen' : 'Auto-shape is off'); };
   placePop(anchor);
@@ -390,7 +471,7 @@ function openEraserPop(anchor) {
 }
 /* page overview grid */
 async function openOverview() {
-  await board.flush(); closePop();
+  await A.flush(); closePop();
   const w = document.createElement('div'); w.className = 'modalWrap';
   w.innerHTML = `<div class="modal ov" role="dialog" aria-modal="true" aria-labelledby="ovH">
     <div class="row"><h2 id="ovH" style="flex:1">Pages</h2><button id="ovSel" hidden>Cancel</button><button id="ovAll" hidden>Select all</button><button class="primary" id="ovClose">Close</button></div>
@@ -402,26 +483,26 @@ async function openOverview() {
   let selecting = false, picked = new Set();
   const close = () => w.remove(); q('#ovClose').onclick = close; w.addEventListener('click', e => { if (e.target === w) close(); });
   const render = () => {
-    const info = board.pageInfo(), grid = q('#ovGrid'); grid.innerHTML = '';
-    info.forEach(p => { const b = document.createElement('button'); b.type = 'button'; b.className = 'thumb' + (picked.has(p.i) ? ' on' : '') + (p.i === board.curPage ? ' cur' : '');
+    const info = A.pageInfo(), grid = q('#ovGrid'); grid.innerHTML = '';
+    info.forEach(p => { const b = document.createElement('button'); b.type = 'button'; b.className = 'thumb' + (picked.has(p.i) ? ' on' : '') + (p.i === A.curPage ? ' cur' : '');
       b.setAttribute('aria-label', 'Page ' + (p.i + 1)); b.innerHTML = `<span class="tn">${p.i + 1}</span>${p.kind === 'pdf' ? '<span class="tw pdf">PDF</span>' : ''}`;
       // press and hold a page to start selecting (like Samsung); then taps add or remove pages
       let holdT = 0, held = false;
       b.addEventListener('pointerdown', () => { held = false; clearTimeout(holdT); holdT = setTimeout(() => { held = true; if (!selecting) { selecting = true; picked.clear(); } picked.add(p.i); [...q('#ovGrid').children].forEach((el, i) => el.classList.toggle('on', picked.has(i))); acts(); navigator.vibrate && navigator.vibrate(20); }, 450); });
       ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => b.addEventListener(t, () => clearTimeout(holdT)));
       b.addEventListener('contextmenu', e => e.preventDefault());
-      b.onclick = () => { if (held) { held = false; return; } if (!selecting) { board.goPage(p.i); close(); return; } picked.has(p.i) ? picked.delete(p.i) : picked.add(p.i); b.classList.toggle('on'); acts(); };
+      b.onclick = () => { if (held) { held = false; return; } if (!selecting) { A.goPage(p.i); close(); return; } picked.has(p.i) ? picked.delete(p.i) : picked.add(p.i); b.classList.toggle('on'); acts(); };
       grid.appendChild(b); });
-    (async () => { const boxes = [...grid.children]; for (const p of info) { if (!w.isConnected || !boxes[p.i]) return; try { const c = await board.renderPage(p.i, 180); c.className = 'tc'; boxes[p.i].prepend(c); } catch (e) {} } })();
+    (async () => { const boxes = [...grid.children]; for (const p of info) { if (!w.isConnected || !boxes[p.i]) return; try { const c = await A.renderPage(p.i, 180); c.className = 'tc'; boxes[p.i].prepend(c); } catch (e) {} } })();
     acts();
   };
   const acts = () => { if (selecting && !picked.size) selecting = false; q('#ovActs').hidden = !selecting; q('#ovSel').hidden = q('#ovAll').hidden = !selecting; q('#ovN').textContent = picked.size + ' selected'; };
   q('#ovSel').onclick = () => { selecting = false; picked.clear(); render(); };
-  q('#ovAll').onclick = () => { picked = new Set(board.pageInfo().map(p => p.i)); [...q('#ovGrid').children].forEach(el => el.classList.add('on')); acts(); };
-  q('#ovDel').onclick = e => { if (!picked.size) return toast('Pick pages first'); const b = e.currentTarget; if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = `Tap again to delete ${picked.size}`; return; } b.dataset.sure = ''; b.textContent = 'Delete selected'; board.deletePages([...picked]); picked.clear(); render(); };
-  q('#ovAdd').onclick = () => { const at = picked.size ? Math.max(...picked) + 1 : board.pageCount(); board.insertPage(at, null); picked.clear(); render(); };
-  q('#ovEnd').onclick = () => { board.insertPage(board.pageCount(), null); render(); };
-  const shift = d => { if (picked.size !== 1) return toast('Pick one page to move'); const i = [...picked][0], j = i + d; if (j < 0 || j >= board.pageCount()) return; board.movePage(i, j); picked = new Set([j]); render(); };
+  q('#ovAll').onclick = () => { picked = new Set(A.pageInfo().map(p => p.i)); [...q('#ovGrid').children].forEach(el => el.classList.add('on')); acts(); };
+  q('#ovDel').onclick = e => { if (!picked.size) return toast('Pick pages first'); const b = e.currentTarget; if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = `Tap again to delete ${picked.size}`; return; } b.dataset.sure = ''; b.textContent = 'Delete selected'; A.deletePages([...picked]); picked.clear(); render(); };
+  q('#ovAdd').onclick = () => { const at = picked.size ? Math.max(...picked) + 1 : A.pageCount(); A.insertPage(at, null); picked.clear(); render(); };
+  q('#ovEnd').onclick = () => { A.insertPage(A.pageCount(), null); render(); };
+  const shift = d => { if (picked.size !== 1) return toast('Pick one page to move'); const i = [...picked][0], j = i + d; if (j < 0 || j >= A.pageCount()) return; A.movePage(i, j); picked = new Set([j]); render(); };
   q('#ovUp').onclick = () => shift(-1); q('#ovDown').onclick = () => shift(1);
   render();
 }
@@ -429,11 +510,12 @@ async function openOverview() {
 const selBar = document.createElement('div'); selBar.className = 'selbar'; selBar.hidden = true;
 selBar.innerHTML = '<span id="selN"></span><button id="selDup">Duplicate</button><button id="selDel" class="danger">Delete</button><button id="selDone">Done</button>';
 document.body.appendChild(selBar);
-selBar.querySelector('#selDup').onclick = () => board.selDuplicate();
-selBar.querySelector('#selDel').onclick = () => board.selDelete();
-selBar.querySelector('#selDone').onclick = () => board.clearSel();
-function onSelection(r) {
-  if (!r) { selBar.hidden = true; return; }
+selBar.querySelector('#selDup').onclick = () => selOwner.selDuplicate();
+selBar.querySelector('#selDel').onclick = () => selOwner.selDelete();
+selBar.querySelector('#selDone').onclick = () => selOwner.clearSel();
+function onSelection(r, inst = board) {
+  if (!r) { if (selOwner === inst) selBar.hidden = true; return; }
+  selOwner = inst;
   selBar.hidden = false; selBar.querySelector('#selN').textContent = r.count + ' selected · tap a colour to recolour';
   const w = selBar.offsetWidth, h = selBar.offsetHeight; let top = r.top - h - 10; if (top < 8) top = Math.min(innerHeight - h - 8, r.bottom + 10);
   selBar.style.left = Math.max(8, Math.min(innerWidth - w - 8, (r.left + r.right) / 2 - w / 2)) + 'px'; selBar.style.top = top + 'px';
@@ -531,22 +613,22 @@ async function openSettings() {
 let wake = null;
 async function keepAwake() { try { if (!wake && navigator.wakeLock) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => wake = null); } } catch (e) {} }
 document.addEventListener('pointerdown', keepAwake, { passive: true });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); else board.flush(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); else { board.flush(); if (B2) B2.flush(); } });
 document.addEventListener('keydown', e => {
   if (e.target.closest && e.target.closest('input,select,textarea')) return;
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); e.shiftKey ? board.doRedo() : board.doUndo(); }
-  else if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); board.doRedo(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); e.shiftKey ? A.doRedo() : A.doUndo(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); A.doRedo(); }
 });
 
 /* ---------- start ---------- */
 (async () => {
   Object.assign(cfg, (await store.get('kv', 'cfg').catch(() => null)) || {});
   Object.assign(board.tool, (await store.get('kv', 'tool').catch(() => null)) || {}); await loadNames();
-  board.init({ el: $('#board'), canvas: $('#ink'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: onSelection, penInfo: t => { const el = document.getElementById('penInfo'); if (el) el.textContent = t; }, pullHint: pullHint, finger: () => cfg.finger, closePop,
+  board.init({ toolChanged: paint, el: $('#board'), canvas: $('#ink'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: onSelection, penInfo: t => { const el = document.getElementById('penInfo'); if (el) el.textContent = t; }, pullHint: pullHint, finger: () => cfg.finger, closePop,
     hint: v => { $('#hint').style.opacity = v ? 1 : 0; }, page: (c, n) => { $('#pg').textContent = c + ' / ' + n; } });
   bg.init($('#bg'), () => $('#lib').hidden ? $('#win').getBoundingClientRect() : null);
   await cam.init({ el: $('#cam'), toast });
-  await rec.init({ toast, status: recStatus, bgCanvas: bg.canvas, boardCanvas: board.canvas, ideVisible: () => !$('#ide').hidden, drawIde: ctx => ide.drawInto(ctx) });
+  await rec.init({ toast, status: recStatus, bgCanvas: bg.canvas, boardCanvas: board.canvas, drawContent: ctx => drawContent(ctx) });
   ide.init({ toast });
   await drive.init({ blobSource: src => src.type === 'rec' ? rec.blobFor(src.id) : store.get('blobs', src.key) });
   drive.onChange(driveStatus); driveStatus();
@@ -578,9 +660,9 @@ async function queueRec(r) {
 }
 async function openShare() {
   if (!topic) return;
-  if (!$('#ide').hidden) { toast('Tap ✎ Annotate (or pick up a pen tool), write your notes, then tap the cloud button to send the PDF.'); return; }
-  await board.flush();
-  const info = board.pageInfo(), t = topic;
+  if (!$('#ide').hidden && A === board) { toast('Tap ✎ Annotate (or pick up a pen tool), write your notes, then tap the cloud button to send the PDF.'); return; }
+  await A.flush();
+  const info = A.pageInfo(), t = A === board ? topic : b2topic;
   const touchedIx = info.filter(p => p.touched).map(p => p.i);
   let sel = new Set(); if (touchedIx.length) for (let i = Math.min(...touchedIx); i <= Math.max(...touchedIx); i++) sel.add(i);
   const recs = (await store.all('recs')).map(([, v]) => v).filter(r => r.topicId === t.id && r.status === 'done' && !r.drive).sort((a, b) => b.started - a.started);
@@ -607,7 +689,7 @@ async function openShare() {
   q('#shT1').onclick = () => { sel = new Set(touchedIx); paintSel(); if (!touchedIx.length) toast('You have not written on any page since opening this topic'); };
   q('#shAll').onclick = () => { sel = new Set(info.map(p => p.i)); paintSel(); };
   q('#shNone').onclick = () => { sel = new Set(); paintSel(); };
-  (async () => { for (const p of info) { if (!w.isConnected) return; try { const c = await board.renderPage(p.i, 150); c.className = 'tc'; boxes[p.i].prepend(c); } catch (e) {} } })();
+  (async () => { for (const p of info) { if (!w.isConnected) return; try { const c = await A.renderPage(p.i, 150); c.className = 'tc'; boxes[p.i].prepend(c); } catch (e) {} } })();
   if (recs.length) {
     const rr = q('#shRecs'); rr.innerHTML = '<strong style="font-size:14px">Recordings of this topic</strong>'; const td = today();
     recs.forEach(r => { const id = 'r' + r.id, d = new Date(r.started), lab = document.createElement('label'); lab.className = 'tog'; lab.htmlFor = id;
@@ -616,7 +698,7 @@ async function openShare() {
   }
   const makePdf = async () => {
     const ix = [...sel].sort((a, b) => a - b); if (!ix.length) return null; q('#shGo').disabled = q('#shSave').disabled = true;
-    try { return { blob: await notesPdf(ix, `${t.name} · ${today()}`, (n, m) => { q('#shSel').textContent = `Making the PDF… page ${n + 1} of ${m}`; }), ix }; }
+    try { return { blob: await notesPdf(ix, `${t.name} · ${today()}`, (n, m) => { q('#shSel').textContent = `Making the PDF… page ${n + 1} of ${m}`; }, A), ix }; }
     finally { q('#shGo').disabled = q('#shSave').disabled = false; }
   };
   const pdfName = ix => clean(`${t.name} - ${today()} - Notes (pages ${ranges(ix)}).pdf`);
@@ -703,4 +785,65 @@ async function copyTopic(src, id, withInk) {
   if (!withInk) doc.pages.forEach(p => { p.s = []; }); doc.strokes = doc.pages.reduce((a, p) => a + p.s.length, 0);
   for (let d = 0; d < (src.pdfs || 0); d++) { const buf = await store.get('blobs', 'pdf:' + src.id + ':' + d); if (buf) await store.put('blobs', 'pdf:' + id + ':' + d, buf); }
   await store.put('topics', id, doc); await store.put('kv', 'm:' + id, { pages: doc.pages.length, strokes: doc.strokes, updated: Date.now() });
+}
+
+/* ---------- second window (side by side) ---------- */
+function setActive(inst) { A = inst; $('#board').classList.toggle('act', inst === board && !$('#pane2').hidden); $('#pane2').classList.toggle('act', inst === B2); $('#ide').classList.toggle('act', false); }
+$('#board').addEventListener('pointerdown', () => setActive(board), true);
+$('#pane2').addEventListener('pointerdown', () => { if (B2) setActive(B2); }, true);
+const sheetHost = () => (codeCtx && codeCtx.parent) || topic;
+async function sheetsFor(t) { return (await store.get('kv', 'sheets:' + t.id)) || []; }
+async function fillSheets(sel) {
+  const t = sheetHost(), list = await sheetsFor(t), s = $('#p2sheet'); s.innerHTML = '';
+  list.forEach(x => { const o = document.createElement('option'); o.value = x.id; o.textContent = x.name; s.appendChild(o); }); s.value = sel || '';
+}
+async function loadSheet(id) {
+  const t = sheetHost(), list = await sheetsFor(t), sh = list.find(x => x.id === id); if (!sh) return;
+  if (B2) await B2.flush();
+  b2topic = { ...t, id: sh.id, name: `${t.name} · ${sh.name}`, sheetOf: t.id };
+  await B2.load(b2topic); await store.put('kv', 'sheetLast:' + t.id, id); await fillSheets(id); setActive(B2);
+}
+async function newSheet() {
+  const t = sheetHost(), list = await sheetsFor(t); let n = list.length + 2; while (list.some(x => x.name === 'Sheet ' + n)) n++;
+  const sh = { id: `${t.id}~${Date.now().toString(36)}`, name: list.length ? 'Sheet ' + n : 'Past papers' }; list.push(sh); await store.put('kv', 'sheets:' + t.id, list); await loadSheet(sh.id);
+}
+async function toggleSplit() { if (!$('#pane2').hidden) return closeSplit(); return openSplit(); }
+async function openSplit() {
+  if (!topic) return;
+  if (!B2) {
+    B2 = await import('./board.js?pane=2');
+    B2.init({ el: $('#board2'), canvas: $('#ink2'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: r => onSelection(r, B2), finger: () => cfg.finger, closePop,
+      hint: () => {}, page: (c, n) => { $('#p2pg').textContent = c + ' / ' + n; }, penInfo: () => {}, pullHint: () => {}, toolChanged: () => { Object.assign(board.tool, B2.tool); paint(); } });
+    Object.assign(B2.tool, board.tool);
+  }
+  $('#pane2').hidden = false; $('#app').classList.add('split'); splitB.classList.add('on');
+  const t = sheetHost(), list = await sheetsFor(t), last = await store.get('kv', 'sheetLast:' + t.id);
+  if (list.length) await loadSheet(list.find(x => x.id === last) ? last : list[0].id); else await newSheet();
+}
+async function closeSplit() {
+  if ($('#pane2').hidden) return; if (B2) { await B2.flush(); B2.clearSel(); }
+  $('#pane2').hidden = true; $('#app').classList.remove('split'); splitB.classList.remove('on'); setActive(board); b2topic = null;
+}
+$('#p2close').onclick = () => closeSplit();
+$('#p2new').onclick = () => newSheet();
+$('#p2sheet').onchange = e => loadSheet(e.target.value);
+$('#p2ren').onclick = async () => {
+  const t = sheetHost(), list = await sheetsFor(t), cur = list.find(x => x.id === $('#p2sheet').value); if (!cur) return;
+  const s = $('#p2sheet'), inp = document.createElement('input'); inp.className = 'inl'; inp.value = cur.name; s.replaceWith(inp); inp.focus(); inp.select();
+  let done = false; const fin = async () => { if (done) return; done = true; const v = inp.value.trim(); if (v) cur.name = v; await store.put('kv', 'sheets:' + t.id, list); inp.replaceWith(s); await fillSheets(cur.id); if (b2topic) b2topic.name = `${t.name} · ${cur.name}`; };
+  inp.onkeydown = e => { if (e.key === 'Enter') fin(); }; inp.onblur = fin;
+};
+// recording: draw what each visible window shows
+function drawContent(ctx) {
+  const R = el => el.getBoundingClientRect();
+  if (!$('#ide').hidden) ide.drawInto(ctx);
+  else { const r = R($('#board')); ctx.save(); ctx.beginPath(); ctx.roundRect(r.left, r.top, r.width, r.height, $('#pane2').hidden ? [0, 0, 16, 16] : [0, 0, 0, 16]); ctx.clip(); ctx.drawImage($('#ink'), r.left, r.top, r.width, r.height); ctx.restore(); }
+  if (!$('#pane2').hidden) {
+    const p = R($('#pane2')), r = R($('#board2')), bar = R(document.querySelector('.p2bar'));
+    ctx.fillStyle = '#2a2550'; ctx.fillRect(p.left - 3, p.top, 3, p.height);
+    ctx.fillStyle = '#16142a'; ctx.fillRect(bar.left, bar.top, bar.width, bar.height);
+    const sel = $('#p2sheet'); ctx.fillStyle = '#F2B53A'; ctx.font = '700 13px "Space Grotesk", sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '', bar.left + 12, bar.top + bar.height / 2);
+    ctx.save(); ctx.beginPath(); ctx.roundRect(r.left, r.top, r.width, r.height, [0, 0, 16, 0]); ctx.clip(); ctx.drawImage($('#ink2'), r.left, r.top, r.width, r.height); ctx.restore();
+  }
 }

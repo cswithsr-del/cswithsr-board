@@ -102,7 +102,7 @@ export function compose(ctx, W, H) {
   const tt = $('#title'), tr = R(tt), tcs = getComputedStyle(tt); ctx.fillStyle = '#F5F1EA'; ctx.font = `700 ${tcs.fontSize} "Space Grotesk", sans-serif`; ctx.textAlign = 'center';
   ctx.fillText(tt.textContent, tr.left + tr.width / 2, tr.top + tr.height / 2, tr.width);
   const pg = $('#pg'), pr = R(pg); ctx.fillStyle = '#b9b0d6'; ctx.font = '700 12px "JetBrains Mono", monospace'; ctx.textAlign = 'right'; ctx.fillText(pg.textContent, pr.right, pr.top + pr.height / 2);
-  if (opts.ideVisible && opts.ideVisible()) opts.drawIde(ctx); else { ctx.save(); rr(ctx, board, [0, 0, 16, 16]); ctx.clip(); ctx.drawImage(opts.boardCanvas(), board.left, board.top, board.width, board.height); ctx.restore(); }
+  opts.drawContent(ctx);
   const f = $('footer'), fr = R(f); ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = `700 ${getComputedStyle(f).fontSize} "JetBrains Mono", monospace`; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), fr.right, fr.top + fr.height / 2); ctx.letterSpacing = '0px';
   if (cam.isOn()) {
     const v = cam.video$(), ce = $('#cam'), r = R(ce), circ = ce.classList.contains('circle'), rad = circ ? r.width / 2 : 18;
