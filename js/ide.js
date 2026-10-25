@@ -7,7 +7,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let opts, root, ta, hl, gut, out, inWrap, inBox, list;
 let cur = null;               // { kind: 'prog'|'txt', name, lang }
-let LV = 'ol', size = 20, running = null, worker = null, pyReady = false, waitInput = null;
+let LV = 'ol', LEVEL = 'ol', size = 20, running = null, worker = null, pyReady = false, waitInput = null;
 
 const PS_KW = /\b(DECLARE|CONSTANT|INPUT|OUTPUT|PRINT|IF|THEN|ELSE|ENDIF|CASE|OF|OTHERWISE|ENDCASE|FOR|TO|STEP|NEXT|WHILE|DO|ENDWHILE|REPEAT|UNTIL|PROCEDURE|ENDPROCEDURE|CALL|FUNCTION|RETURNS|RETURN|ENDFUNCTION|BYREF|BYVAL|ARRAY|TYPE|ENDTYPE|OPENFILE|READFILE|WRITEFILE|CLOSEFILE|READ|WRITE|APPEND)\b/;
 const PS_TYPES = /\b(INTEGER|REAL|STRING|CHAR|BOOLEAN|DATE|TRUE|FALSE|AND|OR|NOT|DIV|MOD)\b/;
@@ -85,6 +85,7 @@ print("Report.txt written")
 };
 async function ensureSamples() {
   if (await store.get('kv', 'ideInit:' + LV)) return;
+  if (LV.startsWith('t:')) { await store.put('kv', 'ideInit:' + LV, 1); return; }   // a subtopic starts empty
   if (LV === 'ol') { // programs made before levels existed move into O Level
     for (const [k, v] of await store.getPrefix('kv', 'prog:')) { await store.put('kv', progKey(k.slice(5)), v); await store.del('kv', k); }
     for (const [k, v] of await store.getPrefix('kv', 'file:')) { await store.put('kv', fileKey(k.slice(5)), v); await store.del('kv', k); }
@@ -128,9 +129,9 @@ export function init(o) {
   $('#ideFiles').onclick = () => { root.classList.toggle('noside'); store.put('kv', 'ideSide', !root.classList.contains('noside')).catch(() => {}); };
   if (navigator.serviceWorker) navigator.serviceWorker.addEventListener && 0;
 }
-export async function open(lv) {
+export async function open(lv, level) {
   if (lv !== LV || !cur) { await saveNow(); LV = lv; cur = null; out.innerHTML = ''; }
-  const defaultLang = LV === 'a2' ? 'py' : 'ps';
+  LEVEL = level || lv; const defaultLang = LEVEL === 'a2' ? 'py' : 'ps';
   await ensureSamples();
   size = (await store.get('kv', 'ideSize')) || 20; setSize(size);
   if ((await store.get('kv', 'ideSide')) === false) root.classList.add('noside');

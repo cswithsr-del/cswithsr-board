@@ -33,7 +33,7 @@ export async function start(topic) {
   const mime = pickMime();
   const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime || undefined, videoBitsPerSecond: 5_000_000, audioBitsPerSecond: 128_000 });
   const id = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + Math.random().toString(36).slice(2, 5);
-  const meta = { id, topicId: topic.id, topic: topic.name, chapter: topic.chapterName || '', level: topic.levelName || '', started: Date.now(), dur: 0, size: 0, chunks: 0, mime: mr.mimeType || mime || 'video/webm', status: 'recording', w: outW, h: outH };
+  const meta = { id, topicObj: JSON.parse(JSON.stringify(topic)), topicId: topic.id, topic: topic.name, chapter: topic.chapterName || '', level: topic.levelName || '', started: Date.now(), dur: 0, size: 0, chunks: 0, mime: mr.mimeType || mime || 'video/webm', status: 'recording', w: outW, h: outH };
   await store.put('recs', id, meta);
   rec = { mr, cv, ctx, mic, meta, paused: false, acc: 0, since: performance.now(), timer: 0, analyser: null, silentFor: 0 };
   let writing = Promise.resolve();

@@ -3,7 +3,7 @@ import * as board from './board.js';
 import * as bg from './bg.js';
 import * as cam from './cam.js';
 import * as rec from './rec.js';
-import { LEVELS, topicId, chLabel, inChapter } from './syllabus.js';
+import { LEVELS, topicId, chLabel, inChapter, baseOf, sibling } from './syllabus.js';
 import * as drive from './drive.js';
 import * as ide from './ide.js';
 import { notesPdf } from './export.js';
@@ -24,14 +24,15 @@ async function customTopics() { return (await store.get('kv', 'custom')) || []; 
 let NAMES = { ch: {}, tp: {}, hide: [] };
 async function loadNames() { NAMES = Object.assign({ ch: {}, tp: {}, hide: [] }, (await store.get('kv', 'names')) || {}); }
 const saveNames = () => store.put('kv', 'names', NAMES);
-const chName = (lv, ch) => NAMES.ch[lv + ':' + ch.n] || ch.name;
+const chName = (lv, ch) => NAMES.ch[baseOf(lv) + ':' + ch.n] || ch.name;
+const nk = (lv, name) => topicId(baseOf(lv), name);   // key for names, hiding and code (shared by both O Level batches)
 const tpName = (id, name) => NAMES.tp[id] || name;
 let libEdit = false;
 async function allTopics() {
   const out = []; const custom = await customTopics();
   for (const lv of LEVELS) for (const p of lv.papers) for (const ch of p.chapters) {
-    const names = [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === lv.id && inChapter(ch, c.ch)).map(c => c.name)];
-    for (const name of names) { const id = topicId(lv.id, name); if (NAMES.hide.includes(id)) continue; out.push({ id, name: tpName(id, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
+    const names = [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)];
+    for (const name of names) { const id = topicId(lv.id, name), key = nk(lv.id, name); if (NAMES.hide.includes(key)) continue; out.push({ id, orig: name, codeScope: 't:' + key, name: tpName(key, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
   }
   return out;
 }
@@ -47,23 +48,37 @@ async function findTopic(id) {
   if (id.startsWith('code:')) { const [, lv, ...rest] = id.split(':'); return codeTopic(lv, rest.join(':')); }
   return (await allTopics()).find(t => t.id === id) || null; }
 
-let codeLab = null;   // level id while the Code Lab is open
+// codeCtx: which code space is open. scope = a level ("ol", "as", "a2") for the home Code Lab, or "t:<topic>" for a subtopic.
+let codeCtx = null;
 function setHeader(title, chips) {
   $('#title').textContent = title;
   const el = $('#chips'); el.innerHTML = ''; (chips || []).forEach(c => { const s = document.createElement('span'); s.textContent = c; el.appendChild(s); });
 }
+const hasCode = t => t && !t.codeLab && (t.paper === 'p2' || t.paper === 'p4');
+const shortName = t => t.name.replace(/^\d+(\.\d+)?\s+/, '');
 async function openCodeLab(lv) {
   await board.flush();
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
-  codeLab = lv; topic = codeTopic(lv); setHeader(topic.name, topic.chips); $('#backCode').hidden = true;
+  const L = LEVELS.find(l => l.id === lv);
+  codeCtx = { scope: lv, level: lv, label: 'Code Lab · ' + (lv === 'ol' ? 'O Level' : L.name) };
+  topic = codeTopic(lv); setHeader(codeCtx.label, topic.chips); $('#backCode').hidden = true; codeB.hidden = true;
   $('#lib').hidden = true; document.body.classList.remove('libopen'); setMode('code');
+}
+// the code space of the open subtopic (Paper 2 and Paper 4 only)
+async function toggleTopicCode() {
+  if (codeCtx && codeCtx.parent) { const p = codeCtx.parent; if (!$('#backCode').hidden) return backToCode(); codeCtx = null; return openTopic(p); }
+  if (!hasCode(topic)) return;
+  await board.flush();
+  codeCtx = { scope: topic.codeScope || 't:' + topic.id, level: baseOf(topic.level), label: `Code · ${shortName(topic)}`, parent: topic };
+  setHeader(codeCtx.label, topic.chips); codeB.classList.add('on'); setMode('code');
 }
 // turn the current program into PDF pages and open them as a pen board
 async function startAnnotate() {
-  if (!codeLab || $('#ide').hidden) return; const L = LEVELS.find(l => l.id === codeLab);
+  if (!codeCtx || $('#ide').hidden) return; const L = LEVELS.find(l => l.id === codeCtx.level) || LEVELS[0];
   toast('Making pages from your code…');
-  const snap = await ide.snapshotPdf(L.name); if (!snap) { toast('Open a program first'); return; }
-  await board.flush(); topic = codeTopic(codeLab, snap.prog);
+  const snap = await ide.snapshotPdf(codeCtx.parent ? `${L.name.replace(' · Online', '')} · ${shortName(codeCtx.parent)}` : L.name.replace(' · Online', '')); if (!snap) { toast('Open a program first'); return; }
+  await board.flush();
+  topic = { id: `code:${codeCtx.scope}:${snap.prog}`, name: `${snap.prog} (annotated)`, level: codeCtx.parent ? codeCtx.parent.level : codeCtx.level, levelName: L.name, chips: (codeCtx.parent || L).chips, chapter: 0, chapterName: 'Code', codeLab: true, prog: snap.prog, parent: codeCtx.parent || null };
   setHeader(`${snap.name} · ${snap.lang === 'py' ? 'Python' : 'Pseudocode'}`, topic.chips);
   await board.load(topic); setMode('board'); $('#backCode').hidden = false; $('#hint').style.opacity = 0;
   const file = new File([snap.blob], snap.name + '.pdf', { type: 'application/pdf' });
@@ -92,12 +107,22 @@ function remapper(prev, snap) {
     return { page: hit.pi, dy: (hit.y - r.y) * px };
   };
 }
-async function backToCode() { await board.flush(); topic = codeTopic(codeLab); setHeader(topic.name, topic.chips); $('#backCode').hidden = true; setMode('code'); }
+async function backToCode() { if (!codeCtx) return; await board.flush(); topic = codeCtx.parent || codeTopic(codeCtx.level); setHeader(codeCtx.label, topic.chips); $('#backCode').hidden = true; setMode('code'); }
 async function openTopic(t) {
   await board.flush();
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
-  codeLab = null; $('#backCode').hidden = true; setMode('board');
+  codeCtx = null; $('#backCode').hidden = true; setMode('board');
+  codeB.hidden = !hasCode(t); codeB.classList.remove('on');
   topic = t; cfg.last = t.id; saveCfg();
+  // second O Level batch: offer to start from the other batch's pages
+  const sib = sibling(t.level);
+  if (sib && t.orig && !(await store.get('topics', t.id))) {
+    const sid = topicId(sib, t.orig), sdoc = await store.get('topics', sid);
+    if (sdoc && sdoc.pages && sdoc.pages.some(p => p.k === 'pdf' || (p.s && p.s.length))) {
+      const pick = await askCopy(LEVELS.find(l => l.id === sib).name);
+      if (pick) await copyTopic(sdoc, t.id, pick === 'all');
+    }
+  }
   $('#title').textContent = t.chapter ? `${t.name.replace(/^\d+(\.\d+)?\s+/, '')} · Chapter ${(t.chapterLabel || String(t.chapter)).replace(/^0/, '').replace('–0', '–')}` : t.name;
   const chips = $('#chips'); chips.innerHTML = ''; (t.chips || []).forEach(c => { const s = document.createElement('span'); s.textContent = c; chips.appendChild(s); });
   $('#lib').hidden = true; document.body.classList.remove('libopen');
@@ -135,10 +160,10 @@ async function renderLib() {
   $('#editBtn').classList.toggle('primary', libEdit); $('#editBtn').textContent = libEdit ? 'Done editing' : 'Edit names';
   const levels = q ? LEVELS : LEVELS.filter(l => l.id === cfg.level);
   if (!q && !libEdit) {
-    const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + lv.id + ':')).length;
+    const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + baseOf(lv.id) + ':')).length;
     const cl = document.createElement('button'); cl.className = 'codecard';
-    cl.innerHTML = `<span class="cic"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/></svg></span><span><small>CODE LAB · ${esc(lv.name.toUpperCase())}</small><strong>${lv.id === 'a2' ? 'Python' : 'Pseudocode and Python'}</strong><em>Write, run and annotate programs. Text files included.</em></span><span class="meta">${progs ? progs + (progs === 1 ? ' program' : ' programs') : 'Open'}</span>`;
-    cl.onclick = () => openCodeLab(lv.id); body.appendChild(cl);
+    cl.innerHTML = `<span class="cic"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/></svg></span><span><small>CODE LAB · ${esc(baseOf(lv.id) === 'ol' ? 'O LEVEL (BOTH BATCHES)' : lv.name.toUpperCase())}</small><strong>${lv.id === 'a2' ? 'Python' : 'Pseudocode and Python'}</strong><em>Write, run and annotate programs. Text files included.</em></span><span class="meta">${progs ? progs + (progs === 1 ? ' program' : ' programs') : 'Open'}</span>`;
+    cl.onclick = () => openCodeLab(baseOf(lv.id)); body.appendChild(cl);
   }
   let shown = 0;
   for (const lv of levels) for (const p of lv.papers) {
@@ -147,41 +172,41 @@ async function renderLib() {
     for (const ch of p.chapters) {
       // old subtopics of merged chapters only show if they already have notes or recordings
       const legacy = (ch.legacy || []).filter(n => { const id = topicId(lv.id, n); return metas[id] || recCount[id]; });
-      const names = [...ch.topics, ...legacy, ...custom.filter(c => c.lv === lv.id && inChapter(ch, c.ch)).map(c => c.name)];
+      const names = [...ch.topics, ...legacy, ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)];
       const cName = chName(lv.id, ch);
-      const visible = names.filter(n => !NAMES.hide.includes(topicId(lv.id, n)));
-      const match = visible.filter(n => !q || tpName(topicId(lv.id, n), n).toLowerCase().includes(q) || cName.toLowerCase().includes(q));
+      const visible = names.filter(n => !NAMES.hide.includes(nk(lv.id, n)));
+      const match = visible.filter(n => !q || tpName(nk(lv.id, n), n).toLowerCase().includes(q) || cName.toLowerCase().includes(q));
       if (q && !match.length) continue;
       const card = document.createElement('div'); card.className = 'ch';
       card.innerHTML = `<h3><b>${chLabel(ch)}</b><span class="cn">${esc(cName)}</span></h3>`;
       if (libEdit) {
         const pen = document.createElement('button'); pen.className = 'mini'; pen.textContent = 'Rename'; card.querySelector('h3').appendChild(pen);
-        pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { if (v && v !== ch.name) NAMES.ch[lv.id + ':' + ch.n] = v; else delete NAMES.ch[lv.id + ':' + ch.n]; await saveNames(); renderLib(); });
+        pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = baseOf(lv.id) + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
       }
       for (const orig of match) {
-        const id = topicId(lv.id, orig), name = tpName(id, orig), m = metas[id], rc = recCount[id] || 0; shown++;
+        const id = topicId(lv.id, orig), key = nk(lv.id, orig), name = tpName(key, orig), m = metas[id], rc = recCount[id] || 0; shown++;
         const b = document.createElement(libEdit ? 'div' : 'button'); b.className = 'tp';
         const meta = [m ? m.pages + (m.pages === 1 ? ' PAGE' : ' PAGES') : '', rc ? rc + ' REC' : ''].filter(Boolean).join(' · ');
         b.innerHTML = `<span class="nm">${esc(name)}</span><span class="mt ${m && m.strokes ? 'has' : ''}">${meta || 'NEW'}</span>`;
         if (libEdit) {
           const rn = document.createElement('button'); rn.className = 'mini'; rn.textContent = 'Rename';
-          rn.onclick = () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[id] = v; else delete NAMES.tp[id]; await saveNames(); renderLib(); });
+          rn.onclick = () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[key] = v; else delete NAMES.tp[key]; await saveNames(); renderLib(); });
           const hd = document.createElement('button'); hd.className = 'mini danger'; hd.textContent = 'Hide';
-          hd.onclick = async () => { NAMES.hide.push(id); await saveNames(); toast('Topic hidden. Its notes are kept; “Show hidden” brings it back.'); renderLib(); };
+          hd.onclick = async () => { NAMES.hide.push(key); await saveNames(); toast('Topic hidden. Its notes are kept; “Show hidden” brings it back.'); renderLib(); };
           b.append(rn, hd);
-        } else b.onclick = () => openTopic({ id, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id });
+        } else b.onclick = () => openTopic({ id, orig, codeScope: 't:' + key, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id });
         card.appendChild(b);
       }
-      const hidden = names.filter(n => NAMES.hide.includes(topicId(lv.id, n)));
+      const hidden = names.filter(n => NAMES.hide.includes(nk(lv.id, n)));
       if (libEdit && hidden.length) { const sh = document.createElement('button'); sh.className = 'addt'; sh.textContent = `Show hidden (${hidden.length})`;
-        sh.onclick = async () => { NAMES.hide = NAMES.hide.filter(x => !hidden.some(n => topicId(lv.id, n) === x)); await saveNames(); renderLib(); }; card.appendChild(sh); }
+        sh.onclick = async () => { NAMES.hide = NAMES.hide.filter(x => !hidden.some(n => nk(lv.id, n) === x)); await saveNames(); renderLib(); }; card.appendChild(sh); }
       if (!q) {
         const add = document.createElement('button'); add.className = 'addt'; add.textContent = '+ Add a topic';
         add.onclick = () => {
           const row = document.createElement('div'); row.className = 'addrow';
           row.innerHTML = `<input placeholder="${ch.merged ? 'e.g. Lecture 1: Data types' : 'e.g. ' + ch.n + '.' + (ch.topics.length + 1) + ' Revision'}" aria-label="New topic name"><button class="primary">Add</button>`;
           add.replaceWith(row); const inp = row.querySelector('input'); inp.focus();
-          const go = async () => { const v = inp.value.trim(); if (!v) return renderLib(); const c = await customTopics(); c.push({ lv: lv.id, ch: ch.n, name: v }); await store.put('kv', 'custom', c); renderLib(); };
+          const go = async () => { const v = inp.value.trim(); if (!v) return renderLib(); const c = await customTopics(); c.push({ lv: baseOf(lv.id), ch: ch.n, name: v }); await store.put('kv', 'custom', c); renderLib(); };
           row.querySelector('button').onclick = go; inp.onkeydown = e => { if (e.key === 'Enter') go(); };
         };
         card.appendChild(add);
@@ -278,6 +303,7 @@ const pauseBtn = btn(L, svg('pause'), 'Pause recording', () => rec.pause()); pau
 const recTime = document.createElement('span'); recTime.className = 'rectime'; recTime.hidden = true; L.appendChild(recTime);
 const meter = document.createElement('span'); meter.className = 'meter'; meter.innerHTML = '<b></b>'; meter.hidden = true; L.appendChild(meter);
 const shareB = btn(L, svg('cloud'), 'Send this class to Drive', openShare);
+const codeB = btn(L, svg('code') + '<small>Code</small>', 'Code for this subtopic', () => toggleTopicCode()); codeB.classList.add('homeb', 'codeb'); codeB.hidden = true;
 hr(L);
 COLORS.forEach((c, i) => colorBtns.push(btn(L, `<span class="sw" style="background:${c}"></span>`, CNAMES[i] + ' ink', () => {
   if (!$('#ide').hidden) { startAnnotate(); }
@@ -303,7 +329,7 @@ btn(R, svg('hide'), 'Hide tools', () => document.body.classList.add('hidden-ui')
 $('#show').onclick = () => document.body.classList.remove('hidden-ui');
 function setMode(m) {
   const code = m === 'code'; $('#ide').hidden = !code; $('#board').hidden = code;
-  if (code) { board.clearSel(); ide.open(codeLab || 'ol').then(() => ide.prewarm()); }
+  if (code) { board.clearSel(); ide.open(codeCtx ? codeCtx.scope : 'ol', codeCtx ? codeCtx.level : 'ol').then(() => ide.prewarm()); }
 }
 function paint() {
   const t = board.tool;
@@ -536,7 +562,7 @@ document.addEventListener('keydown', e => {
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const dayOf = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 function levelFolder(t) { const lv = LEVELS.find(l => l.id === t.level); return lv ? `${lv.name.replace(/\//g, '-')} (${lv.code.replace(/ · /g, '-')})` : 'Other'; }
-function drivePath(t) { if (t.codeLab) return [levelFolder(t), 'Code Lab', ...(t.prog ? [t.prog] : [])]; return t.id === 'quick' ? ['Quick Board'] : [levelFolder(t), `Chapter ${t.chapterLabel || String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.name]; }
+function drivePath(t) { if (t.codeLab) return t.parent ? [...drivePath(t.parent), 'Code', t.prog] : [levelFolder(t), 'Code Lab', ...(t.prog ? [t.prog] : [])]; return t.id === 'quick' ? ['Quick Board'] : [levelFolder(t), `Chapter ${t.chapterLabel || String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.name]; }
 function ranges(ix) {
   const out = []; let a = null, b = null; const push = () => out.push(a === b ? `${a + 1}` : `${a + 1}-${b + 1}`);
   for (const i of ix) { if (a === null) { a = b = i; } else if (i === b + 1) b = i; else { push(); a = b = i; } }
@@ -545,7 +571,7 @@ function ranges(ix) {
 const clean = s => s.replace(/[\\/:*?"<>|]/g, '');
 async function queueRec(r) {
   const js = await drive.jobs(); if (js.some(j => j.src.type === 'rec' && j.src.id === r.id && j.status !== 'error')) { toast('Already in the upload list'); return; }
-  const t = (await findTopic(r.topicId)) || { id: r.topicId, name: r.topic, level: 'ol', chapter: 0, chapterName: '' };
+  const t = r.topicObj || (await findTopic(r.topicId)) || { id: r.topicId, name: r.topic, level: 'ol', chapter: 0, chapterName: '' };
   const ext = r.mime.includes('mp4') ? 'mp4' : 'webm';
   await drive.enqueue({ kind: 'rec', name: clean(`${r.topic} - ${dayOf(r.started)} - Class recording.${ext}`), mime: r.mime.split(';')[0], path: drivePath(t), src: { type: 'rec', id: r.id }, label: r.topic });
   toast(drive.settings().clientId ? 'Added to the Drive upload list' : 'Added to the upload list. Connect Google Drive in Settings to start sending.');
@@ -659,3 +685,22 @@ function penTest() {
 
 $('#backCode').onclick = backToCode;
 document.addEventListener('click', e => { if (e.target.closest && e.target.closest('#ideAnn')) startAnnotate(); });
+
+function askCopy(from) {
+  return new Promise(res => {
+    const w = document.createElement('div'); w.className = 'modalWrap';
+    w.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="cpH"><h2 id="cpH">Start from the ${esc(from)} notes?</h2>
+      <p class="help">This topic is new for this batch. You already have pages for it in ${esc(from)}.</p>
+      <div class="row"><button class="primary" data-v="pages">Copy pages and PDFs, without my writing</button></div>
+      <div class="row"><button data-v="all">Copy everything, including my writing</button></div>
+      <div class="row"><button data-v="">Start with a blank page</button></div></div>`;
+    document.body.appendChild(w);
+    w.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { w.remove(); res(b.dataset.v); });
+  });
+}
+async function copyTopic(src, id, withInk) {
+  const doc = JSON.parse(JSON.stringify(src)); doc.id = id; doc.today = null; doc.sy = -28; doc.updated = Date.now();
+  if (!withInk) doc.pages.forEach(p => { p.s = []; }); doc.strokes = doc.pages.reduce((a, p) => a + p.s.length, 0);
+  for (let d = 0; d < (src.pdfs || 0); d++) { const buf = await store.get('blobs', 'pdf:' + src.id + ':' + d); if (buf) await store.put('blobs', 'pdf:' + id + ':' + d, buf); }
+  await store.put('topics', id, doc); await store.put('kv', 'm:' + id, { pages: doc.pages.length, strokes: doc.strokes, updated: Date.now() });
+}

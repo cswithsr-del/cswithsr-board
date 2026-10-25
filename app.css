@@ -222,3 +222,5 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .backcode{font:700 13px var(--display);color:#07021f;background:var(--cy);border:0;border-radius:20px;padding:8px 16px;cursor:pointer;margin-right:auto;margin-left:14px}
 .ib.ann{color:var(--acc);border-color:rgba(242,181,58,.5)}
 .meter.big{width:220px;height:8px;border-radius:4px;display:inline-block}
+.rail .codeb{color:var(--cy);background:rgba(92,225,255,.1);box-shadow:inset 0 0 0 1.5px rgba(92,225,255,.5)}
+.rail .codeb.on{background:rgba(92,225,255,.25)}
