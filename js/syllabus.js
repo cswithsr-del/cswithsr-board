@@ -10,8 +10,9 @@ export const LEVELS = [
       { n: 6, name: 'Automated and Emerging Technologies', topics: ['6.1 Automated Systems', '6.2 Robotics', '6.3 Artificial Intelligence'] },
     ]},
     { id: 'p2', name: 'Paper 2 · Algorithms, Programming and Logic', chapters: [
-      { n: 7, name: 'Algorithm Design and Problem-solving', topics: ['7.1 Program Development Life Cycle', '7.2 Decomposition and Structure Diagrams', '7.3 Flowcharts and Pseudocode', '7.4 Standard Methods', '7.5 Validation and Verification', '7.6 Test Data and Trace Tables'] },
-      { n: 8, name: 'Programming', topics: ['8.1 Programming Concepts', '8.2 Arrays', '8.3 File Handling'] },
+      // chapters 7 and 8 are taught together; add your own subtopics in the app
+      { n: 7, label: '07–08', name: 'Algorithms, Problem-solving and Programming', topics: [], merged: [7, 8],
+        legacy: ['7.1 Program Development Life Cycle', '7.2 Decomposition and Structure Diagrams', '7.3 Flowcharts and Pseudocode', '7.4 Standard Methods', '7.5 Validation and Verification', '7.6 Test Data and Trace Tables', '8.1 Programming Concepts', '8.2 Arrays', '8.3 File Handling'] },
       { n: 9, name: 'Databases', topics: ['9.1 Database Structure', '9.2 SQL'] },
       { n: 10, name: 'Boolean Logic', topics: ['10.1 Logic Gates', '10.2 Logic Circuits and Truth Tables'] },
     ]},
@@ -28,9 +29,9 @@ export const LEVELS = [
       { n: 8, name: 'Databases', topics: ['8.1 Database Concepts', '8.2 Database Management Systems', '8.3 Data Definition and Manipulation Language'] },
     ]},
     { id: 'p2', name: 'Paper 2 · Fundamental Problem-solving and Programming', chapters: [
-      { n: 9, name: 'Algorithm Design and Problem-solving', topics: ['9.1 Computational Thinking Skills', '9.2 Algorithms'] },
-      { n: 10, name: 'Data Types and Structures', topics: ['10.1 Data Types and Records', '10.2 Arrays', '10.3 Files', '10.4 Introduction to Abstract Data Types'] },
-      { n: 11, name: 'Programming', topics: ['11.1 Programming Basics', '11.2 Constructs', '11.3 Structured Programming'] },
+      // chapters 9, 10 and 11 are taught together; add your own subtopics in the app
+      { n: 9, label: '09–11', name: 'Algorithms, Data Structures and Programming', topics: [], merged: [9, 10, 11],
+        legacy: ['9.1 Computational Thinking Skills', '9.2 Algorithms', '10.1 Data Types and Records', '10.2 Arrays', '10.3 Files', '10.4 Introduction to Abstract Data Types', '11.1 Programming Basics', '11.2 Constructs', '11.3 Structured Programming'] },
       { n: 12, name: 'Software Development', topics: ['12.1 Program Development Life Cycle', '12.2 Program Design', '12.3 Program Testing and Maintenance'] },
     ]},
   ]},
@@ -50,3 +51,6 @@ export const LEVELS = [
   ]},
 ];
 export const topicId = (lv, name) => lv + ':' + name.toLowerCase().replace(/[^a-z0-9.]+/g, '-');
+export const chLabel = ch => ch.label || String(ch.n).padStart(2, '0');
+// custom topics belong to a chapter number; merged chapters collect all of their old numbers
+export const inChapter = (ch, n) => n === ch.n || (ch.merged || []).includes(n);

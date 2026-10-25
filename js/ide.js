@@ -343,13 +343,15 @@ export async function snapshotPdf(levelLabel) {
   x.font = `${FS}px "JetBrains Mono", monospace`; const cw = x.measureText('M').width, maxC = Math.max(20, Math.floor((noteX - 30 - codeX) / cw));
   // wrap long lines
   const rows = [];
+  let kk = 0;
   code.forEach((ln, i) => {
+    kk = 0;
     // wrap at a space where possible; continuation lines keep the indent plus 4
     let rest = ln, first = true; const ind = (/^\s*/.exec(ln) || [''])[0] + '    ';
     do {
       const room = first ? maxC : maxC - ind.length; let cut = rest.length <= room ? rest.length : rest.lastIndexOf(' ', room);
       if (cut <= room * .4) cut = Math.min(room, rest.length);
-      rows.push({ n: first ? i + 1 : null, t: (first ? '' : ind) + rest.slice(0, cut) }); rest = rest.slice(cut).replace(/^ /, ''); first = false;
+      rows.push({ n: first ? i + 1 : null, src: i + 1, k: kk++, t: (first ? '' : ind) + rest.slice(0, cut) }); rest = rest.slice(cut).replace(/^ /, ''); first = false;
     } while (rest.length);
   });
   const outText = out.innerText.replace(/\n?— Program finished —\n?/g, '').trim();
@@ -379,10 +381,12 @@ export async function snapshotPdf(levelLabel) {
     if (room >= 3) { lp.out = rest.slice(0, room); rest = rest.slice(room); }
     while (rest.length) { plan.push({ code: [], out: rest.slice(0, perPage - 1) }); rest = rest.slice(perPage - 1); }
   }
+  const layout = [];
   plan.forEach((pg, i) => {
-    frame(i + 1, plan.length); let y = top0 + LH * .7;
+    frame(i + 1, plan.length); let y = top0 + LH * .7; const lay = []; layout.push(lay);
     x.font = `${FS}px "JetBrains Mono", monospace`;
     for (const r of pg.code) {
+      lay.push({ n: r.src, k: r.k, y });
       if (r.n) { x.textAlign = 'right'; x.fillStyle = '#5d6690'; x.fillText(String(r.n), codeX - 24, y); }
       x.textAlign = 'left'; let cx = codeX; for (const [t, col] of tokens(r.t, L)) { x.fillStyle = COL[col] || '#eef1fa'; x.fillText(t, cx, y); cx += cw * t.length; }
       y += LH;
@@ -397,5 +401,5 @@ export async function snapshotPdf(levelLabel) {
     if (i) doc.addPage('a4', 'portrait');
     doc.addImage(c.toDataURL('image/jpeg', .9), 'JPEG', 0, 0, 595.28, 841.89, undefined, 'FAST');
   });
-  return { blob: doc.output('blob'), name: title, lang, prog: cur.name };
+  return { blob: doc.output('blob'), name: title, lang, prog: cur.name, lines: code, layout, W, LH };
 }

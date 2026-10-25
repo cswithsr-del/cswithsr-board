@@ -272,8 +272,8 @@ export async function importPdf(file) {
     for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); add.push({ id: pid(), k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
     let at; if (fresh) { pages = add; at = 0; } else { at = curPage + 1; pages.splice(at, 0, ...add); }
     layout(); view.sy = tops[at] - GAP; view.z = 1; clampView(); req(); save(); opts.hint(false);
-    opts.toast(doc.numPages + ' pages added');
-  } catch (e) { console.warn(e); opts.toast('Could not open this PDF.'); }
+    opts.toast(doc.numPages + ' pages added'); return d;
+  } catch (e) { console.warn(e); opts.toast('Could not open this PDF.'); return -1; }
 }
 
 /* ---- selection ---- */
@@ -567,3 +567,23 @@ export async function renderPage(i, W) {
   for (const st of p.s) drawStroke(st, x);
   return c;
 }
+
+export const hasPdf = d => pages.some(p => p.k === 'pdf' && p.d === d);
+// Swap one PDF's pages for a new version and carry the writing across.
+// remap(oldIndex, stroke) -> { page, dy } says where each stroke belongs on the new pages (dy in page units).
+export async function replacePdf(file, oldD, remap) {
+  const buf = await file.arrayBuffer(); const doc = await openPdf(buf); const d = pdfDocs.length; pdfDocs.push(doc);
+  await store.put('blobs', 'pdf:' + topic.id + ':' + d, buf);
+  const fresh = []; for (let n = 1; n <= doc.numPages; n++) { const pg = await doc.getPage(n); const v = pg.getViewport({ scale: 1 }); fresh.push({ id: pid(), k: 'pdf', d, n, h: Math.round(DOCW * v.height / v.width), s: [] }); }
+  const old = pages.filter(p => p.k === 'pdf' && p.d === oldD); const at = old.length ? pages.indexOf(old[0]) : pages.length;
+  old.forEach((op, oi) => op.s.forEach(st => {
+    const r = remap(oi, st) || { page: oi, dy: 0 }; const tgt = fresh[Math.max(0, Math.min(r.page, fresh.length - 1))];
+    if (r.dy) { st.p = st.p.map((v, i) => i % 3 === 1 ? +(v + r.dy).toFixed(2) : v); build(st); }
+    tgt.s.push(st);
+  }));
+  fresh.forEach(p => { if (old.some(o => touched.has(o.id))) touched.add(p.id); });
+  pages = pages.filter(p => !old.includes(p)); pages.splice(at, 0, ...fresh);
+  undo = []; redo = []; setSel(null); layout(); view.sy = tops[at] - GAP; clampView(); req(); save();
+  return d;
+}
+export const pageUnits = () => DOCW;

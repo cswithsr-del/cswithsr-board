@@ -3,7 +3,7 @@ import * as board from './board.js';
 import * as bg from './bg.js';
 import * as cam from './cam.js';
 import * as rec from './rec.js';
-import { LEVELS, topicId } from './syllabus.js';
+import { LEVELS, topicId, chLabel, inChapter } from './syllabus.js';
 import * as drive from './drive.js';
 import * as ide from './ide.js';
 import { notesPdf } from './export.js';
@@ -30,8 +30,8 @@ let libEdit = false;
 async function allTopics() {
   const out = []; const custom = await customTopics();
   for (const lv of LEVELS) for (const p of lv.papers) for (const ch of p.chapters) {
-    const names = [...ch.topics, ...custom.filter(c => c.lv === lv.id && c.ch === ch.n).map(c => c.name)];
-    for (const name of names) { const id = topicId(lv.id, name); if (NAMES.hide.includes(id)) continue; out.push({ id, name: tpName(id, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterName: chName(lv.id, ch), paper: p.id }); }
+    const names = [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === lv.id && inChapter(ch, c.ch)).map(c => c.name)];
+    for (const name of names) { const id = topicId(lv.id, name); if (NAMES.hide.includes(id)) continue; out.push({ id, name: tpName(id, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
   }
   return out;
 }
@@ -66,8 +66,31 @@ async function startAnnotate() {
   await board.flush(); topic = codeTopic(codeLab, snap.prog);
   setHeader(`${snap.name} · ${snap.lang === 'py' ? 'Python' : 'Pseudocode'}`, topic.chips);
   await board.load(topic); setMode('board'); $('#backCode').hidden = false; $('#hint').style.opacity = 0;
-  if (board.pageCount() > 1 || (board.currentPage() && board.currentPage().k === 'pdf')) board.goPage(board.pageCount() - 1);
-  await board.importPdf(new File([snap.blob], snap.name + '.pdf', { type: 'application/pdf' }));
+  const file = new File([snap.blob], snap.name + '.pdf', { type: 'application/pdf' });
+  const prev = await store.get('kv', 'annlay:' + topic.id);
+  let d;
+  if (prev && board.hasPdf(prev.d)) { d = await board.replacePdf(file, prev.d, remapper(prev, snap)); toast('Code updated. Your writing stays next to the same lines.'); }
+  else { if (board.pageCount() > 1 || (board.currentPage() && board.currentPage().k === 'pdf')) board.goPage(board.pageCount() - 1); d = await board.importPdf(file); }
+  if (d >= 0) await store.put('kv', 'annlay:' + topic.id, { d, lines: snap.lines, layout: snap.layout, W: snap.W, LH: snap.LH });
+}
+// Works out where each pen stroke moves when the code changes: strokes stay with the code line they were written beside.
+function remapper(prev, snap) {
+  const A = prev.lines, B = snap.lines, n = A.length, m2 = B.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m2 + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m2 - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const map = new Array(n).fill(-1); for (let i = 0, j = 0; i < n && j < m2;) { if (A[i] === B[j]) { map[i] = j; i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++; }
+  // edited lines (not exact matches) sitting between two matched lines move with their neighbours
+  for (let i = 0; i < n; i++) if (map[i] < 0) { let a = i - 1; while (a >= 0 && map[a] < 0) a--; const base = a >= 0 ? map[a] : -1; const guess = base + (i - a); if (guess < m2 && !map.includes(guess)) map[i] = guess; }
+  const px = board.pageUnits() / prev.W, LH = prev.LH;
+  const rowAt = (lay, yPx) => { let best = null, bd = 1e9; for (const r of lay) { const c = r.y - LH * .3, dd = Math.abs(c - yPx); if (dd < bd) { bd = dd; best = r; } } return bd <= LH * .9 ? best : null; };
+  const findNew = (line, k) => { for (let pi = 0; pi < snap.layout.length; pi++) { const rs = snap.layout[pi].filter(r => r.n === line); if (rs.length) { const r = rs[Math.min(k, rs.length - 1)]; return { pi, y: r.y }; } } return null; };
+  return (oi, st) => {
+    const lay = prev.layout[oi]; if (!lay) return { page: oi, dy: 0 };
+    const cy = (st.bb[1] + st.bb[3]) / 2 / px; const r = rowAt(lay, cy); if (!r) return { page: oi, dy: 0 };
+    let ni = map[r.n - 1]; if (ni < 0) { let a = r.n - 2; while (a >= 0 && map[a] < 0) a--; ni = a >= 0 ? map[a] : 0; }
+    const hit = findNew(ni + 1, r.k); if (!hit) return { page: oi, dy: 0 };
+    return { page: hit.pi, dy: (hit.y - r.y) * px };
+  };
 }
 async function backToCode() { await board.flush(); topic = codeTopic(codeLab); setHeader(topic.name, topic.chips); $('#backCode').hidden = true; setMode('code'); }
 async function openTopic(t) {
@@ -75,7 +98,7 @@ async function openTopic(t) {
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
   codeLab = null; $('#backCode').hidden = true; setMode('board');
   topic = t; cfg.last = t.id; saveCfg();
-  $('#title').textContent = t.chapter ? `${t.name.replace(/^\d+(\.\d+)?\s+/, '')} · Chapter ${t.chapter}` : t.name;
+  $('#title').textContent = t.chapter ? `${t.name.replace(/^\d+(\.\d+)?\s+/, '')} · Chapter ${(t.chapterLabel || String(t.chapter)).replace(/^0/, '').replace('–0', '–')}` : t.name;
   const chips = $('#chips'); chips.innerHTML = ''; (t.chips || []).forEach(c => { const s = document.createElement('span'); s.textContent = c; chips.appendChild(s); });
   $('#lib').hidden = true; document.body.classList.remove('libopen');
   const has = await board.load(t); $('#hint').style.opacity = has ? 0 : 1;
@@ -122,13 +145,15 @@ async function renderLib() {
     const sec = document.createElement('section'); sec.className = 'paper';
     sec.innerHTML = `<h2>${esc(q ? lv.name + ' · ' : '')}${esc(p.name)}</h2>`; const grid = document.createElement('div'); grid.className = 'chgrid'; sec.appendChild(grid);
     for (const ch of p.chapters) {
-      const names = [...ch.topics, ...custom.filter(c => c.lv === lv.id && c.ch === ch.n).map(c => c.name)];
+      // old subtopics of merged chapters only show if they already have notes or recordings
+      const legacy = (ch.legacy || []).filter(n => { const id = topicId(lv.id, n); return metas[id] || recCount[id]; });
+      const names = [...ch.topics, ...legacy, ...custom.filter(c => c.lv === lv.id && inChapter(ch, c.ch)).map(c => c.name)];
       const cName = chName(lv.id, ch);
       const visible = names.filter(n => !NAMES.hide.includes(topicId(lv.id, n)));
       const match = visible.filter(n => !q || tpName(topicId(lv.id, n), n).toLowerCase().includes(q) || cName.toLowerCase().includes(q));
       if (q && !match.length) continue;
       const card = document.createElement('div'); card.className = 'ch';
-      card.innerHTML = `<h3><b>${String(ch.n).padStart(2, '0')}</b><span class="cn">${esc(cName)}</span></h3>`;
+      card.innerHTML = `<h3><b>${chLabel(ch)}</b><span class="cn">${esc(cName)}</span></h3>`;
       if (libEdit) {
         const pen = document.createElement('button'); pen.className = 'mini'; pen.textContent = 'Rename'; card.querySelector('h3').appendChild(pen);
         pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { if (v && v !== ch.name) NAMES.ch[lv.id + ':' + ch.n] = v; else delete NAMES.ch[lv.id + ':' + ch.n]; await saveNames(); renderLib(); });
@@ -144,7 +169,7 @@ async function renderLib() {
           const hd = document.createElement('button'); hd.className = 'mini danger'; hd.textContent = 'Hide';
           hd.onclick = async () => { NAMES.hide.push(id); await saveNames(); toast('Topic hidden. Its notes are kept; “Show hidden” brings it back.'); renderLib(); };
           b.append(rn, hd);
-        } else b.onclick = () => openTopic({ id, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterName: cName, paper: p.id });
+        } else b.onclick = () => openTopic({ id, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id });
         card.appendChild(b);
       }
       const hidden = names.filter(n => NAMES.hide.includes(topicId(lv.id, n)));
@@ -154,7 +179,7 @@ async function renderLib() {
         const add = document.createElement('button'); add.className = 'addt'; add.textContent = '+ Add a topic';
         add.onclick = () => {
           const row = document.createElement('div'); row.className = 'addrow';
-          row.innerHTML = `<input placeholder="e.g. ${ch.n}.${ch.topics.length + 1} Revision" aria-label="New topic name"><button class="primary">Add</button>`;
+          row.innerHTML = `<input placeholder="${ch.merged ? 'e.g. Lecture 1: Data types' : 'e.g. ' + ch.n + '.' + (ch.topics.length + 1) + ' Revision'}" aria-label="New topic name"><button class="primary">Add</button>`;
           add.replaceWith(row); const inp = row.querySelector('input'); inp.focus();
           const go = async () => { const v = inp.value.trim(); if (!v) return renderLib(); const c = await customTopics(); c.push({ lv: lv.id, ch: ch.n, name: v }); await store.put('kv', 'custom', c); renderLib(); };
           row.querySelector('button').onclick = go; inp.onkeydown = e => { if (e.key === 'Enter') go(); };
@@ -482,7 +507,7 @@ document.addEventListener('keydown', e => {
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const dayOf = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 function levelFolder(t) { const lv = LEVELS.find(l => l.id === t.level); return lv ? `${lv.name.replace(/\//g, '-')} (${lv.code.replace(/ · /g, '-')})` : 'Other'; }
-function drivePath(t) { if (t.codeLab) return [levelFolder(t), 'Code Lab', ...(t.prog ? [t.prog] : [])]; return t.id === 'quick' ? ['Quick Board'] : [levelFolder(t), `Chapter ${String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.name]; }
+function drivePath(t) { if (t.codeLab) return [levelFolder(t), 'Code Lab', ...(t.prog ? [t.prog] : [])]; return t.id === 'quick' ? ['Quick Board'] : [levelFolder(t), `Chapter ${t.chapterLabel || String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.name]; }
 function ranges(ix) {
   const out = []; let a = null, b = null; const push = () => out.push(a === b ? `${a + 1}` : `${a + 1}-${b + 1}`);
   for (const i of ix) { if (a === null) { a = b = i; } else if (i === b + 1) b = i; else { push(); a = b = i; } }
