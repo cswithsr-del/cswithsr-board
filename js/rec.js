@@ -22,7 +22,11 @@ export async function start(topic) {
   const outH = Math.round(outW * innerHeight / innerWidth) & ~1;
   const cv = document.createElement('canvas'); cv.width = outW; cv.height = outH; const ctx = cv.getContext('2d');
   let mic = null;
-  try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+  const dev = (await store.get('kv', 'dev')) || {};
+  const ac0 = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }; if (dev.mic) ac0.deviceId = { exact: dev.mic };
+  try { mic = await navigator.mediaDevices.getUserMedia({ audio: ac0 }); }
+  catch (e0) { if (dev.mic) { delete ac0.deviceId; try { mic = await navigator.mediaDevices.getUserMedia({ audio: ac0 }); opts.toast('The chosen microphone is not connected, so the tablet microphone is used.'); } catch (e) {} } }
+  if (!mic) try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { opts.toast('Microphone not available, so this recording has no sound.'); }
   const vs = cv.captureStream(25);
   const tracks = [...vs.getVideoTracks(), ...(mic ? mic.getAudioTracks() : [])];

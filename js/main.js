@@ -442,6 +442,11 @@ async function openSettings() {
    <h2 id="st">Settings</h2>
    <label for="sCamSize">Camera window size<select id="sCamSize"><option value=".14">Small</option><option value=".19">Medium</option><option value=".26">Large</option><option value=".34">Extra large</option></select></label>
    <label for="sShape">Camera window shape<select id="sShape"><option value="rounded">Rounded rectangle</option><option value="circle">Circle</option></select></label>
+   <h2 style="font-size:16px;margin-top:6px">Camera and microphone</h2>
+   <label for="sCam">Camera for the camera window, recordings and live<select id="sCam"><option value="">Front camera (default)</option></select></label>
+   <label for="sMic">Microphone for recordings and live<select id="sMic"><option value="">Tablet microphone (default)</option></select></label>
+   <div class="row"><button id="sMicTest">Test microphone</button><span class="meter big" id="sMeter"><b></b></span></div>
+   <p class="help">USB and Bluetooth microphones and USB cameras appear here once they are plugged in or paired.</p>
    <label class="tog" for="sMirror"><input type="checkbox" id="sMirror"> Mirror my camera</label>
    <label class="tog" for="sFinger"><input type="checkbox" id="sFinger"> Let my finger write too (off means a finger only scrolls)</label>
    <h2 style="font-size:16px;margin-top:6px">Google Drive</h2>
@@ -469,6 +474,30 @@ async function openSettings() {
   const keepDrive = () => drive.saveSettings({ clientId: q('#dClient').value.trim(), root: q('#dRoot').value.trim() || 'CSwithSR Classes' });
   q('#dConn').onclick = async () => { await keepDrive(); try { await drive.signIn(true); toast('Google Drive connected'); } catch (e) { toast(e.message); } dstat(); };
   q('#sDone').onclick = async () => { await keepDrive(); close(); };
+  // camera and microphone lists (names appear after camera/mic permission has been given once)
+  const fillDevs = async () => {
+    try {
+      const dev = (await store.get('kv', 'dev')) || {}; let list = await navigator.mediaDevices.enumerateDevices();
+      if (!list.some(d => d.label)) { try { const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); s.getTracks().forEach(t => t.stop()); list = await navigator.mediaDevices.enumerateDevices(); } catch (e) {} }
+      const put = (sel, kind, cur) => { list.filter(d => d.kind === kind).forEach((d, i) => { const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || (kind === 'videoinput' ? 'Camera ' : 'Microphone ') + (i + 1); sel.appendChild(o); }); sel.value = cur || ''; if (sel.value !== (cur || '')) sel.value = ''; };
+      put(q('#sCam'), 'videoinput', dev.cam); put(q('#sMic'), 'audioinput', dev.mic);
+    } catch (e) {}
+  };
+  fillDevs();
+  const saveDev = async () => { await store.put('kv', 'dev', { cam: q('#sCam').value, mic: q('#sMic').value }); };
+  q('#sCam').onchange = async () => { await saveDev(); cam.restart(); };
+  q('#sMic').onchange = saveDev;
+  let testS = null;
+  q('#sMicTest').onclick = async () => {
+    if (testS) { testS.getTracks().forEach(t => t.stop()); testS = null; q('#sMicTest').textContent = 'Test microphone'; return; }
+    try {
+      const c0 = q('#sMic').value ? { deviceId: { exact: q('#sMic').value } } : true; testS = await navigator.mediaDevices.getUserMedia({ audio: c0 });
+      const ac = new AudioContext(), an = ac.createAnalyser(); ac.createMediaStreamSource(testS).connect(an); const buf = new Float32Array(an.fftSize);
+      q('#sMicTest').textContent = 'Stop test';
+      const loop = () => { if (!testS || !w.isConnected) { if (testS) testS.getTracks().forEach(t => t.stop()); testS = null; ac.close(); return; } an.getFloatTimeDomainData(buf); let s2 = 0; for (const v of buf) s2 += v * v; q('#sMeter b').style.width = Math.min(100, Math.sqrt(s2 / buf.length) * 600) + '%'; requestAnimationFrame(loop); };
+      loop();
+    } catch (e) { toast('That microphone could not be opened.'); }
+  };
   q('#sPen').onclick = async () => { await keepDrive(); close(); penTest(); }; w.addEventListener('click', e => { if (e.target === w) close(); });
 }
 

@@ -50,7 +50,11 @@ function place() {
 export async function toggle() {
   if (stream) { stop(); return false; }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+    const dev = (await store.get('kv', 'dev')) || {};
+    const v = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+    if (dev.cam) v.deviceId = { exact: dev.cam }; else v.facingMode = 'user';
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false }); }
+    catch (e) { if (!dev.cam) throw e; delete v.deviceId; v.facingMode = 'user'; stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false }); toast('The chosen camera is not connected, so the front camera is used.'); }
     video.srcObject = stream; await video.play().catch(() => {});
     state.on = true; el.hidden = false; place(); return true;
   } catch (e) {
@@ -59,3 +63,5 @@ export async function toggle() {
   }
 }
 export function stop() { if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; state.on = false; video.srcObject = null; el.hidden = true; }
+
+export async function restart() { if (stream) { stop(); await toggle(); } }

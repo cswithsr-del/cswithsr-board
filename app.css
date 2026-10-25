@@ -221,3 +221,4 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .codecard .meta{margin-left:auto;color:var(--muted);font-size:13px;white-space:nowrap}
 .backcode{font:700 13px var(--display);color:#07021f;background:var(--cy);border:0;border-radius:20px;padding:8px 16px;cursor:pointer;margin-right:auto;margin-left:14px}
 .ib.ann{color:var(--acc);border-color:rgba(242,181,58,.5)}
+.meter.big{width:220px;height:8px;border-radius:4px;display:inline-block}
