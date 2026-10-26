@@ -727,8 +727,17 @@ document.addEventListener('keydown', e => {
 /* ---------- send a class to Drive ---------- */
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const dayOf = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-function levelFolder(t) { const lv = LEVELS.find(l => l.id === t.level); return lv ? `${lv.name.replace(/\//g, '-')} (${lv.code.replace(/ · /g, '-')})` : 'Other'; }
-function drivePath(t) { if (t.codeLab) return t.parent ? [...drivePath(t.parent), 'Code', t.prog] : [levelFolder(t), 'Code Lab', ...(t.prog ? [t.prog] : [])]; return t.id === 'quick' ? ['Quick Board'] : [levelFolder(t), `Chapter ${t.chapterLabel || String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.name]; }
+// Drive layout: CSwithSR Classes › O Level / AS Level / A2 Level › Paper › Chapter › Subtopic › Notes or Recordings
+const LEVEL_FOLDER = { ol: 'O Level', olg: 'O Level', as: 'AS Level', a2: 'A2 Level' };
+function levelFolder(t) { return LEVEL_FOLDER[t.level] || 'Other'; }
+function paperFolder(t) { const lv = LEVELS.find(l => l.id === t.level), p = lv && lv.papers.find(x => x.id === t.paper); return p ? p.name.replace(' · ', ' - ') : 'Other'; }
+const batchTag = t => t.level === 'olg' ? 'GreenHall' : t.level === 'ol' ? 'Online' : '';
+function drivePath(t, kind = 'notes') {
+  const leaf = kind === 'rec' ? 'Recordings' : 'Notes';
+  if (t.codeLab) return t.parent ? drivePath(t.parent, kind) : [levelFolder(t), 'Code Lab', leaf];
+  if (t.id === 'quick' || !t.paper) return ['Quick Board', leaf];
+  return [levelFolder(t), paperFolder(t), `Chapter ${t.chapterLabel || String(t.chapter).padStart(2, '0')} - ${t.chapterName}`, t.subName || t.name, leaf];
+}
 function ranges(ix) {
   const out = []; let a = null, b = null; const push = () => out.push(a === b ? `${a + 1}` : `${a + 1}-${b + 1}`);
   for (const i of ix) { if (a === null) { a = b = i; } else if (i === b + 1) b = i; else { push(); a = b = i; } }
@@ -739,7 +748,8 @@ async function queueRec(r) {
   const js = await drive.jobs(); if (js.some(j => j.src.type === 'rec' && j.src.id === r.id && j.status !== 'error')) { toast('Already in the upload list'); return; }
   const t = r.topicObj || (await findTopic(r.topicId)) || { id: r.topicId, name: r.topic, level: 'ol', chapter: 0, chapterName: '' };
   const ext = r.mime.includes('mp4') ? 'mp4' : 'webm';
-  await drive.enqueue({ kind: 'rec', name: clean(`${r.topic} - ${dayOf(r.started)} - Class recording.${ext}`), mime: r.mime.split(';')[0], path: drivePath(t), src: { type: 'rec', id: r.id }, label: r.topic });
+  const bt = batchTag(t);
+  await drive.enqueue({ kind: 'rec', name: clean(`${r.topic}${bt ? ' - ' + bt : ''} - ${dayOf(r.started)} - Class recording.${ext}`), mime: r.mime.split(';')[0], path: drivePath(t, 'rec'), src: { type: 'rec', id: r.id }, label: r.topic });
   toast(drive.settings().clientId ? 'Added to the Drive upload list' : 'Added to the upload list. Connect Google Drive in Settings to start sending.');
 }
 async function openShare() {
@@ -785,7 +795,7 @@ async function openShare() {
     try { return { blob: await notesPdf(ix, `${t.name} · ${today()}`, (n, m) => { q('#shSel').textContent = `Making the PDF… page ${n + 1} of ${m}`; }, A), ix }; }
     finally { q('#shGo').disabled = q('#shSave').disabled = false; }
   };
-  const pdfName = ix => clean(`${t.name} - ${today()} - Notes (pages ${ranges(ix)}).pdf`);
+  const pdfName = ix => clean(`${t.name}${batchTag(t) ? ' - ' + batchTag(t) : ''} - ${today()} - Notes (pages ${ranges(ix)}).pdf`);
   q('#shSave').onclick = async () => { const r = await makePdf(); if (!r) return toast('Pick at least one page');
     const a = document.createElement('a'); a.href = URL.createObjectURL(r.blob); a.download = pdfName(r.ix); document.body.appendChild(a); a.click(); a.remove(); paintSel(); toast('Saving the PDF to your Downloads folder'); };
   q('#shGo').onclick = async () => {
@@ -793,7 +803,7 @@ async function openShare() {
     if (!sel.size && !picks.length) return toast('Pick pages or a recording to send');
     let n = 0;
     if (sel.size) { const r = await makePdf(); const key = 'up:' + Date.now().toString(36); await store.put('blobs', key, r.blob);
-      await drive.enqueue({ kind: 'notes', name: pdfName(r.ix), mime: 'application/pdf', path: drivePath(t), src: { type: 'blob', key }, label: t.name }); n++; }
+      await drive.enqueue({ kind: 'notes', name: pdfName(r.ix), mime: 'application/pdf', path: drivePath(t, 'notes'), src: { type: 'blob', key }, label: t.name }); n++; }
     for (const r of picks) { await queueRec(r); n++; }
     close(); toast(n + (n > 1 ? ' files' : ' file') + (drive.settings().clientId ? ' added to the Drive upload list' : ' saved for upload. Connect Google Drive in Settings to start sending.'));
   };
@@ -884,7 +894,7 @@ async function fillSheets(sel) {
 async function loadSheet(id) {
   const t = sheetHost(), list = await sheetsFor(t), sh = list.find(x => x.id === id); if (!sh) return;
   if (B2) await B2.flush();
-  b2topic = { ...t, id: sh.id, name: `${t.name} · ${sh.name}`, sheetOf: t.id };
+  b2topic = { ...t, id: sh.id, name: `${t.name} · ${sh.name}`, subName: t.subName || t.name, sheetOf: t.id };
   await B2.load(b2topic); await store.put('kv', 'sheetLast:' + t.id, id); await fillSheets(id); setActive(B2);
 }
 async function newSheet() {
