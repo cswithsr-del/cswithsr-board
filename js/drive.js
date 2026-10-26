@@ -4,7 +4,7 @@ import * as store from './store.js';
 
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const CHUNK = 8 * 1024 * 1024;
-let cfg = { clientId: '', root: 'CSwithSR Classes', email: '' };
+let cfg = { clientId: '', root: 'CSwithSR Classes', email: '', helper: '', hkey: '' };
 let token = null, tokenExp = 0, gisP = null, client = null;
 let running = false, listeners = new Set(), state = { msg: '', needsSignIn: false };
 let blobSource = null;
@@ -18,6 +18,8 @@ const setState = s => { Object.assign(state, s); emit(); };
 export async function init(o) {
   blobSource = o.blobSource;
   Object.assign(cfg, (await store.get('kv', 'drive')) || {});
+  // a sign-in from earlier today is still valid after the app is reopened
+  const saved = await store.get('kv', 'dtok'); if (saved && saved.exp > Date.now() + 60000) { token = saved.token; tokenExp = saved.exp; }
   // anything interrupted mid-upload goes back to the queue
   for (const j of await jobs()) if (j.status === 'uploading') { j.status = 'queued'; await saveJob(j); }
   addEventListener('online', () => pump());
@@ -26,7 +28,33 @@ export async function init(o) {
   pump();
 }
 export async function saveSettings(s) { Object.assign(cfg, s); await store.put('kv', 'drive', cfg); emit(); }
-export const connected = () => !!cfg.clientId && !!cfg.email;
+export const connected = () => !!cfg.helper || (!!cfg.clientId && !!cfg.email);
+const keepToken = () => store.put('kv', 'dtok', { token, exp: tokenExp }).catch(() => {});
+// The Drive helper is a small Google Apps Script in your own Google account. It hands the app a fresh Drive key
+// whenever needed, so the app stays connected without sign-in windows.
+async function helperToken() {
+  const r = await fetch(cfg.helper + (cfg.helper.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(cfg.hkey), { cache: 'no-store' });
+  const j = await r.json(); if (!j.token) throw new Error(j.error === 'denied' ? 'The Drive helper refused the key. Copy the helper script again from Settings.' : 'The Drive helper did not answer.');
+  token = j.token; tokenExp = Date.now() + 45 * 60000; if (j.email && cfg.email !== j.email) { cfg.email = j.email; await store.put('kv', 'drive', cfg); }
+  keepToken(); setState({ needsSignIn: false }); return true;
+}
+export async function ensureToken() {
+  if (haveToken()) return true;
+  if (cfg.helper && cfg.hkey) { try { return await helperToken(); } catch (e) { setState({ msg: e.message }); return false; } }
+  return false;
+}
+export async function testHelper() { token = null; tokenExp = 0; await helperToken(); return cfg.email; }
+export function newKey() { const a = new Uint8Array(24); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
+export const helperScript = key => `// CSwithSR Board: Drive helper. Keep this key secret.
+const KEY = '${key}';
+function doGet(e) {
+  const out = o => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+  if (!e || !e.parameter || e.parameter.key !== KEY) return out({ error: 'denied' });
+  return out({ token: ScriptApp.getOAuthToken(), email: Session.getEffectiveUser().getEmail() });
+}
+// Run this once from the editor to give permission.
+function authorize() { DriveApp.getRootFolder(); Logger.log(ScriptApp.getOAuthToken() ? 'Ready' : 'Not ready'); }
+`;
 
 /* ---------- sign-in (Google Identity Services) ---------- */
 function loadGis() {
@@ -48,7 +76,7 @@ export async function signIn(interactive = true) {
       callback: async r => {
         if (r.error) return no(new Error(r.error_description || r.error));
         if (!google.accounts.oauth2.hasGrantedAllScopes(r, SCOPE)) { token = null; return no(new Error('Google Drive permission was not ticked. Tap Connect Drive again and tick the box that lets CSwithSR Board use its Drive files.')); }
-        token = r.access_token; tokenExp = Date.now() + (r.expires_in - 120) * 1000;
+        token = r.access_token; tokenExp = Date.now() + (r.expires_in - 120) * 1000; keepToken();
         try { const u = await (await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } })).json(); if (u.email) cfg.email = u.email; await store.put('kv', 'drive', cfg); } catch (e) {}
         setState({ needsSignIn: false, msg: '' }); ok(); pump();
       },
@@ -59,7 +87,7 @@ export async function signIn(interactive = true) {
 }
 export async function signOut() {
   try { if (token && window.google) google.accounts.oauth2.revoke(token, () => {}); } catch (e) {}
-  token = null; tokenExp = 0; cfg.email = ''; await store.put('kv', 'drive', cfg); await store.del('kv', 'dfolders'); emit();
+  token = null; tokenExp = 0; cfg.email = ''; await store.put('kv', 'drive', cfg); await store.del('kv', 'dfolders'); await store.del('kv', 'dtok'); emit();
 }
 const haveToken = () => token && Date.now() < tokenExp;
 
@@ -80,11 +108,11 @@ export async function pump() {
       const next = (await jobs()).find(j => j.status === 'queued' || j.status === 'uploading');
       if (!next) { setState({ msg: '' }); break; }
       if (!navigator.onLine) { setState({ msg: 'Waiting for internet' }); break; }
-      if (!cfg.clientId) { setState({ msg: 'Connect Google Drive in Settings to start uploading' }); break; }
-      if (!haveToken()) { setState({ needsSignIn: true, msg: 'Tap “Connect Drive” to continue uploading' }); break; }
+      if (!cfg.clientId && !cfg.helper) { setState({ msg: 'Connect Google Drive in Settings to start uploading' }); break; }
+      if (!(await ensureToken())) { setState({ needsSignIn: !cfg.helper, msg: cfg.helper ? state.msg || 'Drive helper not reachable' : 'Tap “Connect Drive” to continue uploading' }); break; }
       try { await upload(next); }
       catch (e) {
-        if (e.auth) { token = null; setState({ needsSignIn: true, msg: 'Tap “Connect Drive” to continue uploading' }); break; }
+        if (e.auth) { token = null; tokenExp = 0; if (cfg.helper && !next._authRetry) { next._authRetry = 1; continue; } setState({ needsSignIn: !cfg.helper, msg: 'Tap “Connect Drive” to continue uploading' }); break; }
         if (e.net || !navigator.onLine) { next.status = 'queued'; await saveJob(next); setState({ msg: 'Waiting for internet' }); break; }
         next.status = 'error'; next.err = e.message; await saveJob(next); emit();
       }
@@ -107,7 +135,7 @@ async function why(r, what) {
   throw new Error(`${what} (${r.status}${msg ? ': ' + msg.slice(0, 140) : ''})`);
 }
 async function folderFor(path) {
-  const cache = (await store.get('kv', 'dfolders')) || {};
+  const cache = (await store.get('kv', 'dfolders' + (cfg.helper ? ':h' : ''))) || {};
   let parent = 'root', key = '';
   for (const name of path) {
     key += '/' + name;
@@ -122,7 +150,7 @@ async function folderFor(path) {
       if (!c.ok) await why(c, 'Could not create Drive folder');
       id = (await c.json()).id;
     }
-    cache[key] = parent = id; await store.put('kv', 'dfolders', cache);
+    cache[key] = parent = id; await store.put('kv', 'dfolders' + (cfg.helper ? ':h' : ''), cache);
   }
   return parent;
 }

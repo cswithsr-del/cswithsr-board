@@ -620,6 +620,19 @@ async function openSettings() {
    <label for="dRoot">Main Drive folder name<input id="dRoot"></label>
    <p id="dCheck" class="help"></p>
    <div class="row"><button id="dConn" class="primary">Connect Drive</button><span id="dStat" style="font-size:13px;color:var(--muted)"></span></div>
+   <details class="helperbox"><summary><b>Stay connected to Drive (recommended)</b></summary>
+     <p class="help">Google signs a web app out every hour. A small helper in your own Google account keeps the app connected, with no sign-in windows. Set it up once:</p>
+     <ol class="help">
+       <li>Tap <b>Copy helper script</b> below.</li>
+       <li>Open <b>script.google.com</b>, tap <b>New project</b>, delete what is there, paste, and tap <b>Save</b>.</li>
+       <li>Choose the function <b>authorize</b> at the top and tap <b>Run</b>. Allow access (Advanced › Go to project › Allow).</li>
+       <li>Tap <b>Deploy › New deployment</b>, type <b>Web app</b>, Execute as <b>Me</b>, Who has access <b>Anyone</b>, then <b>Deploy</b>.</li>
+       <li>Copy the <b>Web app URL</b>, paste it here and tap <b>Test</b>.</li>
+     </ol>
+     <div class="row"><button id="hCopy">Copy helper script</button></div>
+     <label for="hUrl">Helper web app URL<input id="hUrl" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"></label>
+     <div class="row"><button id="hTest" class="primary">Test</button><button id="hOff">Remove helper</button><span id="hStat" class="help"></span></div>
+   </details>
    <p class="help"><b>Teaching on Zoom:</b> open a topic here, then in Google Meet tap Share screen (or Zoom: Share › Screen). Keep the meeting's own camera off and use this camera button instead.<br>
    <b>Recording your voice:</b> use <b>Google Meet</b> for live classes. It lets this app record your voice while you share the screen. Zoom keeps the microphone to itself during a call, so with Zoom the recording is silent.<br>
    <b>Camera window:</b> drag it to move it, drag its corner to resize it, double-tap it to switch between a rectangle and a circle.<br>
@@ -632,12 +645,25 @@ async function openSettings() {
   q('#sCamSize').value = ['.14', '.19', '.26', '.34'].reduce((a, v) => Math.abs(v - cam.state.w) < Math.abs(a - cam.state.w) ? v : a, '.19'); q('#sShape').value = cam.state.shape; q('#sMirror').checked = cam.state.mirror; q('#sFinger').checked = cfg.finger;
   const close = () => { cam.setSize(+q('#sCamSize').value); cfg.finger = q('#sFinger').checked; cam.setShape(q('#sShape').value); cam.setMirror(q('#sMirror').checked); saveCfg(); w.remove(); };
   const ds = drive.settings(); q('#dClient').value = ds.clientId; q('#dRoot').value = ds.root;
-  const dstat = () => { const d = drive.settings(); q('#dStat').textContent = d.email ? 'Connected as ' + d.email : (d.clientId ? 'Not connected yet' : 'Paste your Client ID, then tap Connect'); q('#dConn').textContent = d.email ? 'Reconnect' : 'Connect Drive'; };
+  const dstat = () => { const d = drive.settings(); q('#dStat').textContent = d.helper ? 'Connected through the helper' + (d.email ? ' as ' + d.email : '') : d.email ? 'Connected as ' + d.email : (d.clientId ? 'Not connected yet' : 'Paste your Client ID, then tap Connect'); q('#dConn').textContent = d.email ? 'Reconnect' : 'Connect Drive'; };
   dstat();
   const idOk = v => /^\d{6,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com$/i.test(v);
   const showId = () => { const v = q('#dClient').value.trim(); q('#dCheck').textContent = !v ? '' : idOk(v) ? `Looks right: ${v.length} characters, ends with .apps.googleusercontent.com` : (v.includes('…') || v.includes('...') ? 'This ID was copied shortened (it has “…”). Use the copy icon next to the full Client ID.' : v.startsWith('GOCSPX') ? 'This is the client secret. Copy the Client ID instead.' : 'This does not look like a full Client ID. It should be digits, a dash, letters, then .apps.googleusercontent.com'); q('#dCheck').className = 'help ' + (idOk(v) ? 'ok' : 'bad'); };
   q('#dClient').addEventListener('input', showId); showId();
   const keepDrive = () => drive.saveSettings({ clientId: q('#dClient').value.trim(), root: q('#dRoot').value.trim() || 'CSwithSR Classes' });
+  const hs = drive.settings(); q('#hUrl').value = hs.helper || ''; q('#hStat').textContent = hs.helper ? 'Helper set up' : '';
+  q('#hCopy').onclick = async () => {
+    let k = drive.settings().hkey; if (!k) { k = drive.newKey(); await drive.saveSettings({ hkey: k }); }
+    const txt = drive.helperScript(k);
+    try { await navigator.clipboard.writeText(txt); toast('Helper script copied'); } catch (e) { const ta = document.createElement('textarea'); ta.value = txt; ta.className = 'copybox'; q('#hCopy').after(ta); ta.select(); toast('Select all and copy the text that appeared'); }
+  };
+  q('#hTest').onclick = async () => {
+    const u = q('#hUrl').value.trim(); if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(u)) { q('#hStat').textContent = 'Paste the Web app URL that starts with https://script.google.com/'; return; }
+    await drive.saveSettings({ helper: u }); q('#hStat').textContent = 'Testing…';
+    try { const em = await drive.testHelper(); q('#hStat').textContent = 'Connected as ' + em + '. Drive stays connected now.'; drive.pump(); dstat(); }
+    catch (e) { q('#hStat').textContent = e.message + ' Check that access is set to Anyone and that you ran authorize once.'; }
+  };
+  q('#hOff').onclick = async () => { await drive.saveSettings({ helper: '' }); q('#hUrl').value = ''; q('#hStat').textContent = 'Helper removed'; };
   q('#dConn').onclick = async () => { await keepDrive(); try { await drive.signIn(true); toast('Google Drive connected'); } catch (e) { toast(e.message); } dstat(); };
   q('#sDone').onclick = async () => { await keepDrive(); close(); };
   // camera and microphone lists (names appear after camera/mic permission has been given once)
