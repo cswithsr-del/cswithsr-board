@@ -1,5 +1,5 @@
 // Offline cache: every file of the app is stored on the tablet. Bump VERSION when the app changes.
-const VERSION = 'cswithsr-board-v20';
+const VERSION = 'cswithsr-board-v21';
 const FILES = [
   './',
   "app.css",

@@ -209,10 +209,22 @@ function recognise(st) {
 let raf = 0;
 export function req() { if (!raf) raf = requestAnimationFrame(draw); }
 function lum(hex) { const v = parseInt(hex.slice(1), 16); return ((v >> 16 & 255) * .299 + (v >> 8 & 255) * .587 + (v & 255) * .114) / 255; }
+// faded CSwithSR logo across every notes page; pictures, PDFs and writing all sit on top of it
+const WM = { light: null, dark: null };
+(() => { const im = new Image(); im.onload = () => {
+  const mk = tint => { const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; const x = c.getContext('2d'); x.drawImage(im, 0, 0); if (tint) { x.globalCompositeOperation = 'source-in'; x.fillStyle = tint; x.fillRect(0, 0, c.width, c.height); } return c; };
+  WM.light = mk(null); WM.dark = mk('#0b1230'); req(); }; im.src = 'icons/logo.png'; })();
+function drawWatermark(p, top, c, light) {
+  const img = light ? WM.dark : WM.light; if (!img) return;
+  // two marks per page so one is always in view while you scroll
+  const w = DOCW * .5, h = w * img.height / img.width;
+  for (const f of [.27, .75]) { c.save(); c.globalAlpha = light ? .07 : .08; c.translate(DOCW / 2, top + p.h * f); c.rotate(-28 * Math.PI / 180); c.drawImage(img, -w / 2, -h / 2, w, h); c.restore(); }
+}
 function drawPageBg(p, top, c = ctx, live = true) {
   if (p.k === 'pdf') { c.fillStyle = '#fff'; c.fillRect(0, top, DOCW, p.h); if (p.img) c.drawImage(p.img, 0, top, DOCW, p.h); else if (live) queuePdf(p); return; }
   c.fillStyle = p.bg; c.fillRect(0, top, DOCW, p.h);
   const light = lum(p.bg) > .55; const ln = light ? 'rgba(70,100,150,.28)' : 'rgba(255,255,255,.14)';
+  drawWatermark(p, top, c, light);
   if (p.pat === 'lined' || p.pat === 'grid') {
     c.strokeStyle = ln; c.lineWidth = p.pat === 'grid' ? 1 : 1.3; c.beginPath(); const step = p.pat === 'grid' ? 40 : 46;
     for (let y = p.pat === 'grid' ? step : 110; y < p.h; y += step) { c.moveTo(0, top + y); c.lineTo(DOCW, top + y); }
