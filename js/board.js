@@ -39,6 +39,7 @@ export function init(o) {
   cv.addEventListener('pointermove', move);
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   cv.addEventListener('wheel', wheel, { passive: false });
+  cv.addEventListener('contextrestored', () => req());
   cv.addEventListener('pointerleave', e => { if (e.pointerType === 'pen' && btnFrom === 'menu') { btnFlag = false; btnFrom = ''; } if (live && live.hover && e.pointerId === live.id) { finishErase(live); live = null; req(); } });
 }
 
@@ -69,38 +70,64 @@ function clampView() {
 }
 
 /* ---- load / save per topic ---- */
+// Loading switches topic and pages in one step, so a save can never write one topic's pages under another topic.
+let loadSeq = 0, loading = false, saveFor = null;
 export async function load(t) {
-  topic = t; undo = []; redo = []; pdfDocs.length = 0; live = null; touched = new Set(); setSel(null);
-  const doc = await store.get('topics', t.id);
-  if (doc && doc.pages && doc.pages.length) {
-    pages = doc.pages.map(normPage); pages.forEach(p => p.s.forEach(build));
-    view.z = 1; view.sy = doc.sy ?? -GAP;
-    if (doc.today && doc.today.day === dayStr()) touched = new Set(doc.today.ids);
-  } else { pages = [newPage(opts.style())]; view.z = 1; view.sy = -GAP; }
-  layout(); resize();
-  const used = new Set(pages.filter(p => p.k === 'pdf').map(p => p.d));
-  const n = doc ? (doc.pdfs || 0) : 0;
-  for (let d = 0; d < n; d++) {
-    const key = 'pdf:' + t.id + ':' + d;
-    if (!used.has(d)) { store.del('blobs', key).catch(() => {}); pdfDocs[d] = null; continue; }
-    const buf = await store.get('blobs', key);
-    if (buf) { try { pdfDocs[d] = await openPdf(buf); } catch (e) { console.warn(e); } }
-  }
-  req();
+  await flush();                                  // the previous topic is saved first
+  const my = ++loadSeq; loading = true; clearTimeout(saveT); saveT = 0;
+  try {
+    const doc = await store.get('topics', t.id);
+    const docs = [];
+    for (let d = 0; d < (doc ? (doc.pdfs || 0) : 0); d++) {
+      const buf = await store.get('blobs', 'pdf:' + t.id + ':' + d);
+      if (buf) { try { docs[d] = await openPdf(buf); } catch (e) { console.warn(e); } }
+    }
+    if (my !== loadSeq) return false;             // another topic was opened meanwhile
+    // ---- switch everything at once ----
+    topic = t; undo = []; redo = []; live = null; touched = new Set(); sel = null; lru.length = 0;
+    pdfDocs.length = 0; docs.forEach((x, i) => { pdfDocs[i] = x; });
+    if (doc && doc.pages && doc.pages.length) {
+      pages = doc.pages.map(normPage); pages.forEach(p => p.s.forEach(build));
+      view.z = 1; view.sy = doc.sy ?? -GAP;
+      if (doc.today && doc.today.day === dayStr()) touched = new Set(doc.today.ids);
+    } else { pages = [newPage(opts.style())]; view.z = 1; view.sy = -GAP; }
+  } finally { if (my === loadSeq) loading = false; }
+  reportSel(); layout(); resize(); dirty(); req();
   return pages.some(p => p.s.length || p.k === 'pdf');
 }
 let saveT = 0;
 function save() {
-  if (!topic) return; clearTimeout(saveT);
-  saveT = setTimeout(() => { saveT = 0; saveNow().catch(e => opts.toast('Could not save notes: ' + e.message)); }, 900);
+  if (!topic || loading) return; clearTimeout(saveT); dirty();
+  const id = topic.id;
+  saveT = setTimeout(() => { saveT = 0; if (!topic || topic.id !== id || loading) return; saveNow().catch(e => opts.toast('Could not save notes: ' + e.message)); }, 900);
 }
-export async function flush() { if (saveT) { clearTimeout(saveT); saveT = 0; await saveNow(); } }
-function saveNow() {
-  if (!topic) return Promise.resolve();
-  const strokes = pages.reduce((a, p) => a + p.s.length, 0);
-  store.put('kv', 'm:' + topic.id, { pages: pages.length, strokes, updated: Date.now() }).catch(() => {});
-  return store.put('topics', topic.id, { id: topic.id, pdfs: pdfDocs.length, sy: view.sy, updated: Date.now(), strokes, today: { day: dayStr(), ids: [...touched] },
-    pages: pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0, gid: st.gid })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h })) })) });
+export async function flush() { if (saveT) { clearTimeout(saveT); saveT = 0; if (!loading) await saveNow(); } }
+const pageJSON = () => pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0, gid: st.gid })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h })) }));
+async function saveNow() {
+  if (!topic || loading) return;
+  const id = topic.id, strokes = pages.reduce((a, p) => a + p.s.length, 0);
+  const doc = { id, pdfs: pdfDocs.length, sy: view.sy, updated: Date.now(), strokes, today: { day: dayStr(), ids: [...touched] }, pages: pageJSON() };
+  store.put('kv', 'm:' + id, { pages: pages.length, strokes, updated: Date.now() }).catch(() => {});
+  await store.put('topics', id, doc);
+  // safety copies: one earlier version every 10 minutes of work, the last 6 kept
+  try {
+    const h = (await store.get('kv', 'hist:' + id)) || { next: 0, last: 0, slots: [] };
+    if (Date.now() - h.last > 10 * 60000 && strokes + doc.pages.length > 1) {
+      const slot = h.next % 6; await store.put('topics', id + '#v' + slot, doc);
+      h.slots[slot] = { at: Date.now(), pages: doc.pages.length, strokes }; h.next = slot + 1; h.last = Date.now(); await store.put('kv', 'hist:' + id, h);
+    }
+  } catch (e) {}
+}
+export async function versions() {
+  if (!topic) return []; const h = (await store.get('kv', 'hist:' + topic.id)) || { slots: [] };
+  return h.slots.map((s, i) => s && { ...s, slot: i }).filter(Boolean).sort((a, b) => b.at - a.at);
+}
+export async function restoreVersion(slot) {
+  if (!topic) return false; const v = await store.get('topics', topic.id + '#v' + slot); if (!v) return false;
+  await flush(); const cur = { id: topic.id, pdfs: pdfDocs.length, sy: view.sy, updated: Date.now(), pages: pageJSON() };
+  await store.put('topics', topic.id + '#undo', cur);       // the version being replaced is kept too
+  await store.put('topics', topic.id, { ...v, id: topic.id, updated: Date.now() });
+  await load(topic); return true;
 }
 
 /* ---- geometry ---- */
@@ -206,8 +233,10 @@ function recognise(st) {
 }
 
 /* ---- render ---- */
-let raf = 0;
-export function req() { if (!raf) raf = requestAnimationFrame(draw); }
+let raf = 0, baseDirty = true; const base = document.createElement('canvas'), bctx = base.getContext('2d');
+function dirty() { baseDirty = true; }
+export function req() { baseDirty = true; if (!raf) raf = requestAnimationFrame(draw); }
+function reqLive() { if (!raf) raf = requestAnimationFrame(draw); }   // only the stroke in progress changed
 function lum(hex) { const v = parseInt(hex.slice(1), 16); return ((v >> 16 & 255) * .299 + (v >> 8 & 255) * .587 + (v & 255) * .114) / 255; }
 // faded CSwithSR logo across every notes page; pictures, PDFs and writing all sit on top of it
 const WM = { light: null, dark: null };
@@ -221,7 +250,7 @@ function drawWatermark(p, top, c, light) {
   for (const f of [.27, .75]) { c.save(); c.globalAlpha = light ? .07 : .08; c.translate(DOCW / 2, top + p.h * f); c.rotate(-28 * Math.PI / 180); c.drawImage(img, -w / 2, -h / 2, w, h); c.restore(); }
 }
 function drawPageBg(p, top, c = ctx, live = true) {
-  if (p.k === 'pdf') { c.fillStyle = '#fff'; c.fillRect(0, top, DOCW, p.h); if (p.img) c.drawImage(p.img, 0, top, DOCW, p.h); else if (live) queuePdf(p); return; }
+  if (p.k === 'pdf') { if (p.img) c.drawImage(p.img, 0, top, DOCW, p.h); else { c.fillStyle = '#26252c'; c.fillRect(0, top, DOCW, p.h); if (live) queuePdf(p); } if (live && p.want && p.img) queuePdf(p); return; }
   c.fillStyle = p.bg; c.fillRect(0, top, DOCW, p.h);
   const light = lum(p.bg) > .55; const ln = light ? 'rgba(70,100,150,.28)' : 'rgba(255,255,255,.14)';
   drawWatermark(p, top, c, light);
@@ -247,19 +276,28 @@ function drawImages(p, c) {
 function drawStroke(st, c = ctx) { c.strokeStyle = st.c; c.globalAlpha = st.t === 'hl' ? .38 : 1; for (const g of st.g) { c.lineWidth = g.w; c.stroke(g.p); } c.globalAlpha = 1; }
 function selBox() { const s = sel, pad = 10; return [s.bb[0] - pad, s.bb[1] - pad + tops[pages.indexOf(s.page)], s.bb[2] + pad, s.bb[3] + pad + tops[pages.indexOf(s.page)]]; }
 function draw() {
-  raf = 0; const s = sc(), k = view.dpr * s;
-  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#1d1c22'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.setTransform(k, 0, 0, k, -view.sx * k, -view.sy * k); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  raf = 0; if (!cv) return; const s = sc(), k = view.dpr * s;
+  if (base.width !== cv.width || base.height !== cv.height) { base.width = cv.width; base.height = cv.height; baseDirty = true; }
   const y0 = view.sy, y1 = view.sy + view.H / s;
-  pages.forEach((p, i) => {
-    const t = tops[i]; if (t > y1 || t + p.h < y0) return;
-    drawPageBg(p, t); ctx.save(); ctx.beginPath(); ctx.rect(0, t, DOCW, p.h); ctx.clip(); ctx.translate(0, t);
-    drawImages(p, ctx);
-    for (const st of p.s) drawStroke(st);
-    if (live && live.page === p && live.st) drawStroke(live.st);
-    if (live && live.page === p && live.sts) live.sts.forEach(s => drawStroke(s));
-    ctx.restore();
-  });
+  if (baseDirty) {
+    baseDirty = false; const c0 = ctx; ctx = bctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#1d1c22'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(k, 0, 0, k, -view.sx * k, -view.sy * k); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    pages.forEach((p, i) => {
+      const t = tops[i]; if (t > y1 || t + p.h < y0) return;
+      drawPageBg(p, t); ctx.save(); ctx.beginPath(); ctx.rect(0, t, DOCW, p.h); ctx.clip(); ctx.translate(0, t);
+      drawImages(p, ctx);
+      for (const st of p.s) drawStroke(st);
+      ctx.restore();
+    });
+    ctx = c0;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(base, 0, 0);
+  ctx.setTransform(k, 0, 0, k, -view.sx * k, -view.sy * k); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (live && live.page && pages.includes(live.page) && (live.st || live.sts)) {
+    const t = tops[pages.indexOf(live.page)]; ctx.save(); ctx.beginPath(); ctx.rect(0, t, DOCW, live.page.h); ctx.clip(); ctx.translate(0, t);
+    if (live.st) drawStroke(live.st); if (live.sts) live.sts.forEach(x => drawStroke(x)); ctx.restore();
+  }
   if (live && live.mode === 'lasso' && live.path.length > 1) {
     ctx.save(); ctx.setLineDash([8 / s, 6 / s]); ctx.strokeStyle = '#5CE1FF'; ctx.lineWidth = 1.6 / s; ctx.beginPath();
     live.path.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke(); ctx.restore();
@@ -279,7 +317,7 @@ function draw() {
       ctx.strokeStyle = `rgba(255,70,70,${1 - (now - b.t) / 900})`; ctx.lineWidth = 7 / view.z; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
     const L = laser[laser.length - 1]; if (L) { ctx.fillStyle = '#ff4d4d'; ctx.beginPath(); ctx.arc(L.x, L.y, 6 / view.z, 0, 7); ctx.fill(); }
-    ctx.restore(); if (laser.length) req();
+    ctx.restore(); if (laser.length) reqLive();
   }
   const mid = view.sy + view.H / s / 2; let c = 0; for (let i = 0; i < tops.length; i++) if (tops[i] <= mid) c = i;
   curPage = c; opts.page(c + 1, pages.length);
@@ -303,11 +341,13 @@ function queuePdf(p) {
   (async () => {
     try {
       const pg = await pdfDocs[p.d].getPage(p.n); const v1 = pg.getViewport({ scale: 1 });
-      const W = Math.min(2400, Math.max(1200, view.W * view.dpr * Math.min(view.z, 1.8)));
+      const W = Math.min(1700, Math.max(1000, view.W * view.dpr * Math.min(view.z, 1.6)));
       const vp = pg.getViewport({ scale: W / v1.width }); const c = document.createElement('canvas');
       c.width = Math.round(vp.width); c.height = Math.round(vp.height);
-      await pg.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise; p.img = c; lru.push(p);
-      while (lru.length > 10) { const o = lru.shift(); if (o !== p) o.img = null; }
+      await pg.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise; if (!pages.includes(p)) return;
+      p.img = c; p.want = 0; const i0 = lru.indexOf(p); if (i0 >= 0) lru.splice(i0, 1); lru.push(p);
+      const vis = new Set(pages.filter((q, i) => tops[i] < view.sy + view.H / sc() + 400 && tops[i] + q.h > view.sy - 400));
+      for (let i = 0; lru.length > 6 && i < lru.length;) { const o = lru[i]; if (!vis.has(o) && o !== p) { o.img = null; lru.splice(i, 1); } else i++; }
     } catch (e) { console.warn(e); } finally { busy.delete(p); req(); }
   })();
 }
@@ -382,6 +422,7 @@ function modeFor(e) {
 }
 const hlColor = () => (tool.c === '#ffffff' || tool.c === '#111111') ? '#F2B53A' : tool.c;
 function down(e) {
+  if (loading) return;                           // a topic is still opening
   if (e.pointerType === 'pen') lastPenSeen = performance.now();
   stopInertia(); opts.closePop && opts.closePop();
   if (e.pointerType === 'pen') { lastPen = `type pen · button ${e.button} · buttons ${e.buttons}`; opts.penInfo && opts.penInfo(lastPen); }
@@ -450,7 +491,7 @@ function move(e) {
       P.push(+x.toFixed(2), +ly.toFixed(2), +pr.toFixed(3));
     }
     if (live.mode === 'draw') build(live.st);
-    req(); return;
+    if (live && (live.mode === 'draw' || live.mode === 'shape' || live.mode === 'lasso' || live.mode === 'laser')) reqLive(); else req(); return;
   }
   const t = touches.get(e.pointerId); if (!t) return;
   const now = performance.now(), dxs = e.clientX - t.x, dys = e.clientY - t.y, dt = Math.max(1, now - t.t);
@@ -521,7 +562,8 @@ function startInertia(vx, vy) {
 }
 function stopInertia() { if (inertia) { cancelAnimationFrame(inertia); inertia = null; } }
 let resT = 0;
-function refreshPdfRes() { clearTimeout(resT); resT = setTimeout(() => { if (view.z > 1.3) pages.forEach(p => { if (p.k === 'pdf' && p.img && p.img.width < view.W * view.dpr * view.z * .9) p.img = null; }); req(); }, 400); }
+// after zooming in, sharper PDF pictures are made in the background; the old one stays on screen until then
+function refreshPdfRes() { clearTimeout(resT); resT = setTimeout(() => { if (view.z > 1.3) pages.forEach(p => { if (p.k === 'pdf' && p.img && p.img.width < Math.min(1700, view.W * view.dpr * view.z * .9)) p.want = 1; }); req(); }, 400); }
 function eraseAt(x, y) {
   const pg = pageAt(y); live.cx = x; live.cy = y; req(); if (pg < 0) return;
   const page = pages[pg], ly = y - tops[pg], S = page.s;

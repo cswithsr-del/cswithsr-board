@@ -3,9 +3,10 @@ const rnd = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x 
 let bg, b, W = 0, H = 0, dpr = 1, last = 0, getWin;
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 export const canvas = () => bg;
-function size() { dpr = Math.min(devicePixelRatio || 1, 1.5); W = innerWidth; H = innerHeight; bg.width = W * dpr; bg.height = H * dpr; frame(performance.now(), true); }
+function size() { dpr = 1; W = innerWidth; H = innerHeight; bg.width = W * dpr; bg.height = H * dpr; frame(performance.now(), true); }
 export function init(el, winFn) { bg = el; b = bg.getContext('2d'); getWin = winFn; addEventListener('resize', size); size(); requestAnimationFrame(loop); }
-function loop(now) { requestAnimationFrame(loop); if (now - last < 45 || document.hidden) return; last = now; if (!still) frame(now); }
+// about 12 frames a second keeps the background moving but leaves the tablet free for writing and screen sharing
+function loop(now) { requestAnimationFrame(loop); if (now - last < 80 || document.hidden) return; last = now; if (!still) frame(now); }
 function frame(now) {
   const t = now / 1000, ph = t / 20 * Math.PI * 2;
   b.setTransform(dpr, 0, 0, dpr, 0, 0);

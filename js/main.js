@@ -490,6 +490,7 @@ function openPop(anchor) {
     <div class="plabel">Page lines</div><div class="swrow" id="pPats"></div>
     <label class="tog small"><input type="checkbox" id="pAll"> Apply to all my pages in this topic</label>
     <div class="prow"><button class="opt" id="pFit">Fit page width</button><button class="opt" id="pClear">Clear writing on this page</button></div>
+    <div class="prow"><button class="opt" id="pVer">Earlier versions…</button></div>
     <div class="prow"><button class="opt danger" id="pDel">Delete this page</button>${isPdf ? '<button class="opt danger" id="pPdf">Remove this whole PDF</button>' : ''}</div>`;
   const apply = (nb, np) => { cfg.pageBg = nb; cfg.pagePat = np; saveCfg(); if (!isPdf) A.setPageStyle({ bg: nb, pat: np }, pop.querySelector('#pAll').checked); closePop(); };
   const cols = pop.querySelector('#pCols');
@@ -500,6 +501,18 @@ function openPop(anchor) {
   board.PATTERNS.forEach(([k, n]) => { const b = document.createElement('button'); b.className = 'ppat' + (k === pat ? ' on' : ''); b.innerHTML = `<svg viewBox="0 0 24 24">${PAGE_ICONS[k]}</svg><span>${n}</span>`; b.onclick = () => apply(bg, k); pats.appendChild(b); });
   pop.querySelector('#pAdd').onclick = () => { A.addPage(isPdf ? { bg: cfg.pageBg, pat: cfg.pagePat } : null); closePop(); };
   pop.querySelector('#pFit').onclick = () => { A.fit(); closePop(); };
+  pop.querySelector('#pVer').onclick = async () => {
+    const list = await A.versions(); closePop();
+    const w = document.createElement('div'); w.className = 'modalWrap';
+    w.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="vH"><h2 id="vH">Earlier versions of these notes</h2>
+      <p class="help">The app keeps a copy every 10 minutes while you work (the last 6). Restoring keeps today's version as a backup too.</p>
+      <div class="recs" id="vList">${list.length ? '' : '<p class="empty">No earlier versions yet. They appear after about 10 minutes of writing.</p>'}</div><div class="row"><button id="vClose">Close</button></div></div>`;
+    document.body.appendChild(w); w.querySelector('#vClose').onclick = () => w.remove();
+    list.forEach(v => { const row = document.createElement('div'); row.className = 'recrow'; const d = new Date(v.at);
+      row.innerHTML = `<div class="info"><strong>${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</strong><span>${v.pages} page${v.pages === 1 ? '' : 's'} · ${v.strokes} pen strokes</span></div><div class="acts"><button class="ghost primary">Restore</button></div>`;
+      row.querySelector('button').onclick = async e => { const b = e.currentTarget; if (!b.dataset.sure) { b.dataset.sure = 1; b.textContent = 'Tap again to restore'; return; } await A.restoreVersion(v.slot); w.remove(); toast('Notes restored to that version'); };
+      w.querySelector('#vList').appendChild(row); });
+  };
   pop.querySelector('#pClear').onclick = () => { if (A.clearPage()) toast('Page cleared. Undo brings it back.'); closePop(); };
   pop.querySelector('#pDel').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { A.deletePage(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to delete'; } };
   if (isPdf) pop.querySelector('#pPdf').onclick = e => { const b = e.currentTarget; if (b.dataset.sure) { A.removePdf(); closePop(); } else { b.dataset.sure = 1; b.textContent = 'Tap again to remove the PDF'; } };

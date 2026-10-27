@@ -18,7 +18,7 @@ function pickMime() {
 }
 export async function start(topic) {
   if (rec) return;
-  const outW = Math.min(1920, Math.round(innerWidth * Math.min(devicePixelRatio || 1, 2))) & ~1;
+  const outW = Math.min(1600, Math.round(innerWidth * Math.min(devicePixelRatio || 1, 2))) & ~1;
   const outH = Math.round(outW * innerHeight / innerWidth) & ~1;
   const cv = document.createElement('canvas'); cv.width = outW; cv.height = outH; const ctx = cv.getContext('2d');
   let mic = null;
@@ -28,7 +28,7 @@ export async function start(topic) {
   catch (e0) { if (dev.mic) { delete ac0.deviceId; try { mic = await navigator.mediaDevices.getUserMedia({ audio: ac0 }); opts.toast('The chosen microphone is not connected, so the tablet microphone is used.'); } catch (e) {} } }
   if (!mic) try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { opts.toast('Microphone not available, so this recording has no sound.'); }
-  const vs = cv.captureStream(25);
+  const vs = cv.captureStream(24);
   const tracks = [...vs.getVideoTracks(), ...(mic ? mic.getAudioTracks() : [])];
   const mime = pickMime();
   const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime || undefined, videoBitsPerSecond: 5_000_000, audioBitsPerSecond: 128_000 });
@@ -48,7 +48,7 @@ export async function start(topic) {
     try { const ac = new AudioContext(); const an = ac.createAnalyser(); an.fftSize = 512; ac.createMediaStreamSource(mic).connect(an); rec.analyser = an; rec.ac = ac; rec.buf = new Float32Array(an.fftSize); } catch (e) {}
   }
   mr.start(3000);
-  rec.timer = setInterval(tick, 40);
+  rec.timer = setInterval(tick, 42);
   tick();
 }
 function elapsed() { return rec ? Math.round((rec.acc + (rec.paused ? 0 : performance.now() - rec.since)) / 1000) : 0; }
@@ -79,7 +79,10 @@ export async function blobFor(id) {
 export async function remove(id) { await store.delPrefix('blobs', 'rec:' + id + ':'); await store.del('recs', id); }
 
 /* ---- draw the student view into the recording canvas ---- */
-const R = el => el.getBoundingClientRect();
+// positions and styles are measured a few times a second, not on every frame
+let mCache = new Map(), mAt = 0;
+const R = el => { const now = performance.now(); if (now - mAt > 300) { mCache = new Map(); mAt = now; } let v = mCache.get(el); if (!v) { v = { r: el.getBoundingClientRect() }; mCache.set(el, v); } return v.r; };
+const getComputedStyleC = el => { R(el); const v = mCache.get(el); if (!v.s) { const s = getComputedStyle(el); v.s = { color: s.color, fontSize: s.fontSize, letterSpacing: s.letterSpacing, backgroundColor: s.backgroundColor }; } return v.s; };
 function rr(ctx, r, rad) { ctx.beginPath(); ctx.roundRect(r.left, r.top, r.width, r.height, rad); }
 export function compose(ctx, W, H) {
   const k = W / innerWidth;
@@ -89,7 +92,7 @@ export function compose(ctx, W, H) {
   const logo = $('header img'); if (logo && logo.complete) { const r = R(logo); ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 10; ctx.drawImage(logo, r.left, r.top, r.width, r.height); ctx.restore(); }
   ctx.textBaseline = 'middle';
   for (const s of document.querySelectorAll('#chips span')) {
-    const r = R(s), cs = getComputedStyle(s); ctx.strokeStyle = cs.color; ctx.lineWidth = 2; rr(ctx, r, r.height / 2); ctx.stroke();
+    const r = R(s), cs = getComputedStyleC(s); ctx.strokeStyle = cs.color; ctx.lineWidth = 2; rr(ctx, r, r.height / 2); ctx.stroke();
     ctx.fillStyle = cs.color; ctx.font = `700 ${cs.fontSize} "JetBrains Mono", monospace`; ctx.letterSpacing = cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing;
     ctx.textAlign = 'center'; ctx.fillText(s.textContent, r.left + r.width / 2 + 1, r.top + r.height / 2 + 1);
   }
@@ -98,12 +101,12 @@ export function compose(ctx, W, H) {
   ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 50; ctx.shadowOffsetY = 20; ctx.fillStyle = '#120d36'; rr(ctx, win, 16); ctx.fill(); ctx.restore();
   ctx.save(); ctx.shadowColor = 'rgba(92,225,255,.25)'; ctx.shadowBlur = 40; ctx.strokeStyle = 'rgba(242,181,58,.45)'; ctx.lineWidth = 2; rr(ctx, { left: win.left - 1, top: win.top - 1, width: win.width + 2, height: win.height + 2 }, 17); ctx.stroke(); ctx.restore();
   const g = ctx.createLinearGradient(0, bar.top, 0, bar.bottom); g.addColorStop(0, '#1a1446'); g.addColorStop(1, '#120d36'); ctx.fillStyle = g; rr(ctx, bar, [16, 16, 0, 0]); ctx.fill();
-  for (const i of document.querySelectorAll('.bar i')) { const r = R(i); ctx.fillStyle = getComputedStyle(i).backgroundColor; ctx.beginPath(); ctx.arc(r.left + r.width / 2, r.top + r.height / 2, r.width / 2, 0, 7); ctx.fill(); }
-  const tt = $('#title'), tr = R(tt), tcs = getComputedStyle(tt); ctx.fillStyle = '#F5F1EA'; ctx.font = `700 ${tcs.fontSize} "Space Grotesk", sans-serif`; ctx.textAlign = 'center';
+  for (const i of document.querySelectorAll('.bar i')) { const r = R(i); ctx.fillStyle = getComputedStyleC(i).backgroundColor; ctx.beginPath(); ctx.arc(r.left + r.width / 2, r.top + r.height / 2, r.width / 2, 0, 7); ctx.fill(); }
+  const tt = $('#title'), tr = R(tt), tcs = getComputedStyleC(tt); ctx.fillStyle = '#F5F1EA'; ctx.font = `700 ${tcs.fontSize} "Space Grotesk", sans-serif`; ctx.textAlign = 'center';
   ctx.fillText(tt.textContent, tr.left + tr.width / 2, tr.top + tr.height / 2, tr.width);
   const pg = $('#pg'), pr = R(pg); ctx.fillStyle = '#b9b0d6'; ctx.font = '700 12px "JetBrains Mono", monospace'; ctx.textAlign = 'right'; ctx.fillText(pg.textContent, pr.right, pr.top + pr.height / 2);
   opts.drawContent(ctx);
-  const f = $('footer'), fr = R(f); ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = `700 ${getComputedStyle(f).fontSize} "JetBrains Mono", monospace`; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), fr.right, fr.top + fr.height / 2); ctx.letterSpacing = '0px';
+  const f = $('footer'), fr = R(f); ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = `700 ${getComputedStyleC(f).fontSize} "JetBrains Mono", monospace`; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), fr.right, fr.top + fr.height / 2); ctx.letterSpacing = '0px';
   if (cam.isOn()) {
     const v = cam.video$(), ce = $('#cam'), r = R(ce), circ = ce.classList.contains('circle'), rad = circ ? r.width / 2 : 18;
     ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.45)'; ctx.shadowBlur = 24; ctx.fillStyle = '#000'; rr(ctx, r, rad); ctx.fill(); ctx.restore();
