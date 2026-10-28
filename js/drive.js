@@ -176,11 +176,12 @@ async function upload(j) {
     if (r.status === 308) { const rg = r.headers.get('Range'); j.offset = rg ? +rg.split('-')[1] + 1 : 0; }
     else { j.session = null; j.offset = 0; }
   }
+  if (!j.session && j.lec && !j.lec.done) { await nameLecture(j); await saveJob(j); emit(); setState({ msg: 'Uploading ' + j.name }); }
   if (!j.session) {
     const parent = j.parentId || await folderFor([cfg.root || 'CSwithSR Classes', ...j.path]);
     const r = await call('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
       method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': j.mime, 'X-Upload-Content-Length': String(total) },
-      body: JSON.stringify({ name: j.name, parents: [parent], mimeType: j.mime }) });
+      body: JSON.stringify({ name: j.name, parents: [parent], mimeType: j.mime, ...(j.lec && j.lec.done ? { appProperties: { lec: String(j.lec.n), lecPart: String(j.lec.part || ''), lecDate: j.lec.date } } : {}) }) });
     if (!r.ok) await why(r, 'Drive refused the upload');
     j.session = r.headers.get('Location'); j.offset = 0; if (!j.session) throw new Error('Drive did not return an upload address.');
     await saveJob(j);
@@ -204,6 +205,45 @@ async function finish(j, info) {
   if (j.src.type === 'rec') { const m = await store.get('recs', j.src.id); if (m) { m.drive = j.link || 'uploaded'; await store.put('recs', m.id, m); } }
   emit();
 }
+// ---- Lecture numbers: continue from the highest "<prefix> Chap <x> Lecture N" already in Drive ----
+const norm = s => s.replace(/\s*,\s*/g, ',').replace(/\s+/g, ' ').trim();
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const localDay = iso => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+export async function lectureFiles(prefix, chap) {
+  const base = norm(`${prefix} Chap ${chap} Lecture`);
+  const re = new RegExp('^' + reEsc(base) + '\\s*(\\d+)(?:\\.(\\d+))?(\\s*notes)?(?![\\d])', 'i');
+  let out = [], page = '';
+  do {
+    const r = await call('https://www.googleapis.com/drive/v3/files?pageSize=1000&q=' + encodeURIComponent("name contains 'Lecture' and trashed=false") + '&fields=' + encodeURIComponent('nextPageToken,files(id,name,createdTime,appProperties)') + (page ? '&pageToken=' + page : ''));
+    if (!r.ok) await why(r, 'Could not read your Drive to find the lecture number');
+    const js = await r.json(); page = js.nextPageToken || '';
+    for (const f of js.files || []) { const m = norm(f.name).match(re); if (m) out.push({ id: f.id, name: f.name, n: +m[1], part: m[2] ? +m[2] : 0, notes: !!m[3], date: (f.appProperties && f.appProperties.lecDate) || localDay(f.createdTime) }); }
+  } while (page);
+  return out;
+}
+async function nameLecture(j) {
+  const L = j.lec, base = `${L.prefix} Chap ${L.chap} Lecture `;
+  const all = await lectureFiles(L.prefix, L.chap);
+  const maxN = all.reduce((a, e) => Math.max(a, e.n), 0), atMax = all.filter(e => e.n === maxN);
+  const sameDay = maxN > 0 && atMax.some(e => e.date === L.date);
+  let n = sameDay ? maxN : maxN + 1, part = 0, name;
+  if (L.kind === 'notes') {
+    name = `${base}${n} Notes`; const taken = new Set(all.filter(e => e.notes && e.n === n).map(e => norm(e.name).replace(/\.[^.]+$/, '').toLowerCase()));
+    for (let k = 2; taken.has(norm(name).toLowerCase()); k++) name = `${base}${n} Notes (${k})`;
+  } else {
+    const recs = sameDay ? atMax.filter(e => !e.notes) : [];
+    if (recs.length) {
+      for (const e of recs.filter(e => !e.part)) {   // the earlier recording of today becomes N.1
+        const nn = e.name.replace(new RegExp('(Lecture\\s*' + n + ')(?!\\d)(?!\\.\\d)'), '$1.1');
+        if (nn !== e.name) { const r = await call(`https://www.googleapis.com/drive/v3/files/${e.id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nn, appProperties: { lec: String(n), lecPart: '1', lecDate: L.date } }) }); if (r.ok) e.part = 1; }
+      }
+      part = Math.max(1, ...recs.map(e => e.part || 1)) + 1;
+    }
+    name = `${base}${n}${part ? '.' + part : ''}`;
+  }
+  j.name = name.replace(/[\\/:*?"<>|]/g, '') + '.' + L.ext; L.n = n; L.part = part; L.done = true;
+}
+
 // Drive browser: a signed-in request, and the app's own top folder
 export async function api(url, init = {}) {
   if (!(await ensureToken())) { const e = new Error(cfg.helper ? 'Drive helper not reachable. Check the internet.' : 'Connect Google Drive first (Drive uploads, then Connect Drive).'); e.auth = true; throw e; }

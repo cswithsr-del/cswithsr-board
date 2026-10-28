@@ -296,3 +296,7 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .primary.danger{background:#e5484d!important;color:#fff!important;border-color:#e5484d!important}
 .dbprev{z-index:50}
 .dbpv iframe{width:100%;height:100%;border:0;border-radius:12px;background:#000}
+
+.lecfs{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:grid;gap:8px}
+.lecfs legend{font:700 13px var(--display);color:var(--ink);padding:0 6px}
+.lecgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}

@@ -634,6 +634,8 @@ async function openSettings() {
    <div class="row"><button id="sMicTest">Test microphone</button><span class="meter big" id="sMeter"><b></b></span></div>
    <p class="help">USB and Bluetooth microphones and USB cameras appear here once they are plugged in or paired.</p>
    <label class="tog" for="sMirror"><input type="checkbox" id="sMirror"> Mirror my camera</label>
+   <fieldset class="lecfs"><legend>Lecture file names on Drive</legend><p class="help">Files are named like <b>OL-IGCSE Chap 7,8 Lecture 6.mp4</b>. The number continues from the highest one already in your Drive for that chapter. Two recordings on the same day become 6.1 and 6.2.</p>
+    <div class="lecgrid"><label>O Level · Online<input id="lpOl"></label><label>O Level · GreenHall<input id="lpOlg"></label><label>AS Level<input id="lpAs"></label><label>A2 Level<input id="lpA2"></label></div></fieldset>
    <label class="tog" for="sThumb"><input type="checkbox" id="sThumb"> Erase by resting a finger or thumb on the board while the pen writes</label>
    <label class="tog" for="sFinger"><input type="checkbox" id="sFinger"> Let my finger write too (off means a finger only scrolls)</label>
    <h2 style="font-size:16px;margin-top:6px">Google Drive</h2>
@@ -664,6 +666,7 @@ async function openSettings() {
   document.body.appendChild(w);
   const q = s => w.querySelector(s);
   q('#sCamSize').value = ['.14', '.19', '.26', '.34'].reduce((a, v) => Math.abs(v - cam.state.w) < Math.abs(a - cam.state.w) ? v : a, '.19'); q('#sShape').value = cam.state.shape; q('#sMirror').checked = cam.state.mirror; q('#sFinger').checked = cfg.finger; q('#sThumb').checked = cfg.thumbErase !== false;
+  [['ol', '#lpOl'], ['olg', '#lpOlg'], ['as', '#lpAs'], ['a2', '#lpA2']].forEach(([k, s]) => { q(s).value = lecPrefix(k); q(s).onchange = () => { cfg.lecPrefix = { ...(cfg.lecPrefix || {}), [k]: q(s).value.replace(/[\\/:*?"<>|]/g, '').trim() || LEC_PREFIX[k] }; saveCfg(); }; });
   const close = () => { cam.setSize(+q('#sCamSize').value); cfg.finger = q('#sFinger').checked; cfg.thumbErase = q('#sThumb').checked; cam.setShape(q('#sShape').value); cam.setMirror(q('#sMirror').checked); saveCfg(); w.remove(); };
   const ds = drive.settings(); q('#dClient').value = ds.clientId; q('#dRoot').value = ds.root;
   const dstat = () => { const d = drive.settings(); q('#dStat').textContent = d.helper ? 'Connected through the helper' + (d.email ? ' as ' + d.email : '') : d.email ? 'Connected as ' + d.email : (d.clientId ? 'Not connected yet' : 'Paste your Client ID, then tap Connect'); q('#dConn').textContent = d.email ? 'Reconnect' : 'Connect Drive'; };
@@ -752,6 +755,19 @@ const dayOf = ts => { const d = new Date(ts); return `${d.getFullYear()}-${Strin
 const LEVEL_FOLDER = { ol: 'O Level', olg: 'O Level', as: 'AS Level', a2: 'A2 Level' };
 function levelFolder(t) { return LEVEL_FOLDER[t.level] || 'Other'; }
 function paperFolder(t) { const lv = LEVELS.find(l => l.id === t.level), p = lv && lv.papers.find(x => x.id === t.paper); return p ? p.name.replace(' · ', ' - ') : 'Other'; }
+// Lecture names: "OL-IGCSE Chap 7,8 Lecture 6.mp4". The number is worked out from Drive when the file is sent.
+const LEC_PREFIX = { ol: 'OL-IGCSE', olg: 'OL-IGCSE GreenHall', as: 'AS', a2: 'A2' };
+const lecPrefix = lv => ((cfg.lecPrefix || {})[lv] || LEC_PREFIX[lv] || '').trim();
+function chapNums(t) {
+  const m = String(t.chapterLabel || '').match(/^(\d+)\s*[–-]\s*(\d+)$/);
+  if (m) { const out = []; for (let i = +m[1]; i <= +m[2]; i++) out.push(i); return out.join(','); }
+  return String(+t.chapter || +String(t.chapterLabel || '').replace(/\D/g, '') || '');
+}
+function lecInfo(t, kind, date, ext) {
+  if (!t || t.codeLab || t.id === 'quick' || !t.paper || !t.chapter || !lecPrefix(t.level)) return null;
+  return { prefix: lecPrefix(t.level), chap: chapNums(t), kind, date, ext };
+}
+const lecTemp = l => `${l.prefix} Chap ${l.chap} Lecture … ${l.kind === 'notes' ? 'Notes ' : ''}(number given when sent).${l.ext}`;
 const batchTag = t => t.level === 'olg' ? 'GreenHall' : t.level === 'ol' ? 'Online' : '';
 function drivePath(t, kind = 'notes') {
   const leaf = kind === 'rec' ? 'Recordings' : 'Notes';
@@ -770,7 +786,8 @@ async function queueRec(r) {
   const t = r.topicObj || (await findTopic(r.topicId)) || { id: r.topicId, name: r.topic, level: 'ol', chapter: 0, chapterName: '' };
   const ext = r.mime.includes('mp4') ? 'mp4' : 'webm';
   const bt = batchTag(t);
-  await drive.enqueue({ kind: 'rec', name: clean(`${r.topic}${bt ? ' - ' + bt : ''} - ${dayOf(r.started)} - Class recording.${ext}`), mime: r.mime.split(';')[0], path: drivePath(t, 'rec'), src: { type: 'rec', id: r.id }, label: r.topic });
+  const lec = lecInfo(t, 'rec', dayOf(r.started), ext);
+  await drive.enqueue({ kind: 'rec', lec, name: lec ? lecTemp(lec) : clean(`${r.topic}${bt ? ' - ' + bt : ''} - ${dayOf(r.started)} - Class recording.${ext}`), mime: r.mime.split(';')[0], path: drivePath(t, 'rec'), src: { type: 'rec', id: r.id }, label: r.topic });
   toast(drive.settings().clientId ? 'Added to the Drive upload list' : 'Added to the upload list. Connect Google Drive in Settings to start sending.');
 }
 async function openShare() {
@@ -824,7 +841,8 @@ async function openShare() {
     if (!sel.size && !picks.length) return toast('Pick pages or a recording to send');
     let n = 0;
     if (sel.size) { const r = await makePdf(); const key = 'up:' + Date.now().toString(36); await store.put('blobs', key, r.blob);
-      await drive.enqueue({ kind: 'notes', name: pdfName(r.ix), mime: 'application/pdf', path: drivePath(t, 'notes'), src: { type: 'blob', key }, label: t.name }); n++; }
+      const lec = lecInfo(t, 'notes', today(), 'pdf');
+      await drive.enqueue({ kind: 'notes', lec, name: lec ? lecTemp(lec) : pdfName(r.ix), mime: 'application/pdf', path: drivePath(t, 'notes'), src: { type: 'blob', key }, label: t.name }); n++; }
     for (const r of picks) { await queueRec(r); n++; }
     close(); toast(n + (n > 1 ? ' files' : ' file') + (drive.settings().clientId ? ' added to the Drive upload list' : ' saved for upload. Connect Google Drive in Settings to start sending.'));
   };
