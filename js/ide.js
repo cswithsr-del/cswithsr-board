@@ -111,7 +111,7 @@ export function init(o) {
     <button class="ib" data-ins=":">:</button><button class="ib" data-ins='"'>"</button><button class="ib" data-ins="()">( )</button><button class="ib" data-ins="[]">[ ]</button>
     <button class="ib" id="ideSm" aria-label="Smaller text">A−</button><button class="ib" id="ideLg" aria-label="Bigger text">A+</button>
     <button class="ib ann" id="ideAnn" aria-label="Annotate this program with the pen">✎ Annotate</button>
-    <button class="run" id="ideRun">▶ Run</button><button class="stop" id="ideStop" hidden>■ Stop</button>
+    <span class="waitchip">⌨ Waiting for your input below</span><button class="run" id="ideRun">▶ Run</button><button class="stop" id="ideStop" hidden>■ Stop</button>
   </div>
   <div class="ide-main">
     <aside class="ide-side" id="ideSide"></aside>
@@ -124,7 +124,7 @@ export function init(o) {
   ta.addEventListener('keydown', keys);
   root.querySelectorAll('[data-lang]').forEach(b => b.onclick = () => setLang(b.dataset.lang));
   root.querySelectorAll('[data-ins]').forEach(b => b.onclick = () => insert(b.dataset.ins));
-  $('#ideRun').onclick = runIt; $('#ideStop').onclick = stopIt; $('#ideClr').onclick = () => clearOut();
+  $('#ideRun').onclick = runIt; $('#ideStop').addEventListener('pointerdown', e => { e.preventDefault(); stopIt(); }); $('#ideStop').onclick = stopIt; $('#ideClr').onclick = () => clearOut();
   $('#ideSm').onclick = () => setSize(size - 2); $('#ideLg').onclick = () => setSize(size + 2);
   $('#ideFiles').onclick = () => { root.classList.toggle('noside'); store.put('kv', 'ideSide', !root.classList.contains('noside')).catch(() => {}); };
   if (navigator.serviceWorker) navigator.serviceWorker.addEventListener && 0;
@@ -237,12 +237,18 @@ function flushOut() {
   out.scrollTop = out.scrollHeight; opts.changed && opts.changed();
 }
 function askInput() {
+  // show any text still waiting first, so the question appears before the typing box
+  if (pendRaf) { cancelAnimationFrame(pendRaf); flushOut(); }
   return new Promise(res => {
-    const box = document.createElement('input'); box.className = 'con-in'; box.setAttribute('aria-label', 'Program input'); box.autocapitalize = 'off'; box.autocomplete = 'off';
-    out.appendChild(box); box.focus(); out.scrollTop = out.scrollHeight;
-    waitInput = v => { box.remove(); waitInput = null; write(v + '\n', 'in'); res(v); };
-    inputReject = () => { box.remove(); waitInput = null; inputReject = null; res(null); };
+    const row = document.createElement('span'); row.className = 'inrow';
+    row.innerHTML = '<input class="con-in" aria-label="Program input" placeholder="Type here, then press Enter" autocapitalize="off" autocomplete="off"><button class="inok" type="button">Enter ↵</button>';
+    const box = row.querySelector('input');
+    out.appendChild(row); root.classList.add('waiting'); box.focus(); out.scrollTop = out.scrollHeight;
+    const done = () => { row.remove(); waitInput = null; inputReject = null; root.classList.remove('waiting'); };
+    waitInput = v => { done(); write(v + '\n', 'in'); res(v); };
+    inputReject = () => { done(); res(null); };
     box.onkeydown = e => { if (e.key === 'Enter') waitInput(box.value); };
+    row.querySelector('.inok').onclick = () => waitInput(box.value);
   });
 }
 function setRunning(r) { running = r; $('#ideRun').hidden = !!r; $('#ideStop').hidden = !r; opts.changed && opts.changed(); }
@@ -295,7 +301,7 @@ async function runPython() {
 let inputReject = null;
 function stopIt() {
   if (!running) return;
-  if (running.py) { if (worker) worker.terminate(); worker = null; pyReady = false; if (waitInput) { const b = out.querySelector('.con-in'); b && b.remove(); waitInput = null; } write('\n— Stopped —\n', 'dim'); setRunning(null); }
+  if (running.py) { if (worker) worker.terminate(); worker = null; pyReady = false; if (inputReject) inputReject(); write('\n— Stopped —\n', 'dim'); setRunning(null); }
   else { running.stop = true; if (inputReject) inputReject(); }   // also stops a program that is waiting for input
 }
 // warm Python up in the background when the code tab opens on Python

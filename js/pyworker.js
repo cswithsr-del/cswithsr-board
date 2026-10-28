@@ -17,7 +17,7 @@ function readLine() {
 }
 
 async function boot() {
-  postMessage({ t: 'status', s: 'Loading Python…' });
+  postMessage({ t: 'status', s: 'Loading Python… (first time needs internet, then it works offline)' });
   py = await loadPyodide({ indexURL: new URL('../vendor/pyodide/', self.location).href });
   // printed text is sent in batches (at most every 60 ms) so a fast loop cannot flood the app
   py.setStdout({ write: buf => { outBuf += dec.decode(buf); if (outBuf.length > 4000 || Date.now() - lastSend > 60) sendOut(); return buf.length; } });

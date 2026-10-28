@@ -252,3 +252,9 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .helperbox summary{cursor:pointer;font-size:14px}
 .helperbox ol{padding-left:20px;margin:6px 0}
 .copybox{width:100%;height:120px;font:12px var(--mono);color:var(--ink);background:#0b0726;border:1px solid var(--line);border-radius:8px}
+
+.inrow{display:inline-flex;align-items:center;gap:8px;width:100%;margin:4px 0;padding:6px 8px;border:2px solid var(--acc);border-radius:10px;background:rgba(242,181,58,.08);animation:pulse 1.6s ease-in-out infinite}
+.inrow .con-in{flex:1;border:0;font-size:1.05em}
+.inok{font:700 14px var(--display);background:var(--acc);color:#07021f;border:0;border-radius:8px;padding:6px 12px;cursor:pointer}
+.waitchip{display:none;font:700 12px var(--display);color:var(--acc);border:1px solid rgba(242,181,58,.6);border-radius:14px;padding:4px 10px}
+#ide.waiting .waitchip{display:inline-block}
