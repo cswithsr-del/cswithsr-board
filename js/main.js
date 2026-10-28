@@ -627,6 +627,7 @@ async function openSettings() {
    <div class="row"><button id="sMicTest">Test microphone</button><span class="meter big" id="sMeter"><b></b></span></div>
    <p class="help">USB and Bluetooth microphones and USB cameras appear here once they are plugged in or paired.</p>
    <label class="tog" for="sMirror"><input type="checkbox" id="sMirror"> Mirror my camera</label>
+   <label class="tog" for="sThumb"><input type="checkbox" id="sThumb"> Erase by resting a finger or thumb on the board while the pen writes</label>
    <label class="tog" for="sFinger"><input type="checkbox" id="sFinger"> Let my finger write too (off means a finger only scrolls)</label>
    <h2 style="font-size:16px;margin-top:6px">Google Drive</h2>
    <label for="dClient">Google Client ID<input id="dClient" placeholder="1234…apps.googleusercontent.com" autocomplete="off"></label>
@@ -655,8 +656,8 @@ async function openSettings() {
    <div class="row"><button id="sPen">Open pen button test</button><button class="primary" id="sDone">Done</button></div></div>`;
   document.body.appendChild(w);
   const q = s => w.querySelector(s);
-  q('#sCamSize').value = ['.14', '.19', '.26', '.34'].reduce((a, v) => Math.abs(v - cam.state.w) < Math.abs(a - cam.state.w) ? v : a, '.19'); q('#sShape').value = cam.state.shape; q('#sMirror').checked = cam.state.mirror; q('#sFinger').checked = cfg.finger;
-  const close = () => { cam.setSize(+q('#sCamSize').value); cfg.finger = q('#sFinger').checked; cam.setShape(q('#sShape').value); cam.setMirror(q('#sMirror').checked); saveCfg(); w.remove(); };
+  q('#sCamSize').value = ['.14', '.19', '.26', '.34'].reduce((a, v) => Math.abs(v - cam.state.w) < Math.abs(a - cam.state.w) ? v : a, '.19'); q('#sShape').value = cam.state.shape; q('#sMirror').checked = cam.state.mirror; q('#sFinger').checked = cfg.finger; q('#sThumb').checked = cfg.thumbErase !== false;
+  const close = () => { cam.setSize(+q('#sCamSize').value); cfg.finger = q('#sFinger').checked; cfg.thumbErase = q('#sThumb').checked; cam.setShape(q('#sShape').value); cam.setMirror(q('#sMirror').checked); saveCfg(); w.remove(); };
   const ds = drive.settings(); q('#dClient').value = ds.clientId; q('#dRoot').value = ds.root;
   const dstat = () => { const d = drive.settings(); q('#dStat').textContent = d.helper ? 'Connected through the helper' + (d.email ? ' as ' + d.email : '') : d.email ? 'Connected as ' + d.email : (d.clientId ? 'Not connected yet' : 'Paste your Client ID, then tap Connect'); q('#dConn').textContent = d.email ? 'Reconnect' : 'Connect Drive'; };
   dstat();
@@ -721,7 +722,7 @@ document.addEventListener('keydown', e => {
 (async () => {
   Object.assign(cfg, (await store.get('kv', 'cfg').catch(() => null)) || {});
   Object.assign(board.tool, (await store.get('kv', 'tool').catch(() => null)) || {}); await loadNames();
-  board.init({ toolChanged: paint, el: $('#board'), canvas: $('#ink'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: onSelection, penInfo: t => { const el = document.getElementById('penInfo'); if (el) el.textContent = t; }, pullHint: pullHint, finger: () => cfg.finger, closePop,
+  board.init({ thumbErase: () => cfg.thumbErase !== false, toolChanged: paint, el: $('#board'), canvas: $('#ink'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: onSelection, penInfo: t => { const el = document.getElementById('penInfo'); if (el) el.textContent = t; }, pullHint: pullHint, finger: () => cfg.finger, closePop,
     hint: v => { $('#hint').style.opacity = v ? 1 : 0; }, page: (c, n) => { $('#pg').textContent = c + ' / ' + n; } });
   bg.init($('#bg'), () => $('#lib').hidden ? $('#win').getBoundingClientRect() : null);
   await cam.init({ el: $('#cam'), toast });
@@ -919,7 +920,7 @@ async function openSplit() {
   if (!topic) return;
   if (!B2) {
     B2 = await import('./board.js?pane=2');
-    B2.init({ el: $('#board2'), canvas: $('#ink2'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: r => onSelection(r, B2), finger: () => cfg.finger, closePop,
+    B2.init({ thumbErase: () => cfg.thumbErase !== false, el: $('#board2'), canvas: $('#ink2'), toast, style: () => ({ bg: cfg.pageBg, pat: cfg.pagePat }), selection: r => onSelection(r, B2), finger: () => cfg.finger, closePop,
       hint: () => {}, page: (c, n) => { $('#p2pg').textContent = c + ' / ' + n; }, penInfo: () => {}, pullHint: () => {}, toolChanged: () => { Object.assign(board.tool, B2.tool); paint(); } });
     Object.assign(B2.tool, board.tool);
   }

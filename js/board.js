@@ -415,13 +415,17 @@ const penButton = e => (e.pointerType === 'pen' || ((e.buttons & 34) || e.button
 function convertToErase() { if (live && live.mode === 'draw') { live = { mode: 'erase', id: live.id, hits: [], snap: new Map() }; req(); } }
 function endHoverErase() { if (live && live.hover) { finishErase(live); live = null; req(); } }
 export let lastPen = '';
+// a finger (or thumb) resting on the board while the pen writes turns the pen into the eraser
+const fingersDown = new Set();
 function modeFor(e) {
   if (penButton(e)) return 'erase';
+  if (e.pointerType === 'pen' && fingersDown.size && (!opts.thumbErase || opts.thumbErase())) return 'erase';
   if (e.pointerType === 'mouse' && e.button === 2) return 'erase';
   return tool.t;
 }
 const hlColor = () => (tool.c === '#ffffff' || tool.c === '#111111') ? '#F2B53A' : tool.c;
 function down(e) {
+  if (e.pointerType === 'touch' && !((e.width || 0) > 45 && (e.height || 0) > 45)) fingersDown.add(e.pointerId);
   if (loading) return;                           // a topic is still opening
   if (e.pointerType === 'pen') lastPenSeen = performance.now();
   stopInertia(); opts.closePop && opts.closePop();
@@ -522,6 +526,7 @@ function xform(x, y) {
   selBB();
 }
 function up(e) {
+  if (e.pointerType === 'touch') fingersDown.delete(e.pointerId);
   if (e.pointerType === 'pen' && btnFrom === 'menu') { btnFlag = false; btnFrom = ''; }
   if (live && e.pointerId === live.id) {
     const L = live; clearTimeout(L.hold);

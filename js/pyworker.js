@@ -1,13 +1,14 @@
 // Runs Python (Pyodide, offline after first load) in a worker so the app never freezes.
 // input() blocks with a synchronous request that the app's service worker answers when the user presses Enter.
 importScripts('../vendor/pyodide/pyodide.js');
-let py = null, inputN = 0;
+let py = null, inputN = 0, outBuf = '', lastSend = 0;
+function sendOut() { if (outBuf) { postMessage({ t: 'out', s: outBuf }); outBuf = ''; } lastSend = Date.now(); }
 const CWD = '/home/pyodide';
 const dec = new TextDecoder();
 
 function readLine() {
   const id = Date.now().toString(36) + '-' + (inputN++);
-  postMessage({ t: 'input', id });
+  sendOut(); postMessage({ t: 'input', id });
   const x = new XMLHttpRequest();
   x.open('GET', new URL('../__stdin__?id=' + id, self.location).href, false);
   try { x.send(null); } catch (e) { throw new Error('input() needs the installed app (open it from the home screen icon).'); }
@@ -18,8 +19,9 @@ function readLine() {
 async function boot() {
   postMessage({ t: 'status', s: 'Loading Python…' });
   py = await loadPyodide({ indexURL: new URL('../vendor/pyodide/', self.location).href });
-  py.setStdout({ write: buf => { postMessage({ t: 'out', s: dec.decode(buf) }); return buf.length; } });
-  py.setStderr({ write: buf => { postMessage({ t: 'err', s: dec.decode(buf) }); return buf.length; } });
+  // printed text is sent in batches (at most every 60 ms) so a fast loop cannot flood the app
+  py.setStdout({ write: buf => { outBuf += dec.decode(buf); if (outBuf.length > 4000 || Date.now() - lastSend > 60) sendOut(); return buf.length; } });
+  py.setStderr({ write: buf => { sendOut(); postMessage({ t: 'err', s: dec.decode(buf) }); return buf.length; } });
   py.setStdin({ stdin: () => readLine() + '\n' });
   py.FS.chdir(CWD);
   postMessage({ t: 'ready' });
@@ -54,8 +56,8 @@ def __run():
         sys.stdout.flush(); sys.stderr.flush()
 __run()
 `);
-  } catch (er) { postMessage({ t: 'err', s: String(er.message || er) + '\n' }); }
+  } catch (er) { sendOut(); postMessage({ t: 'err', s: String(er.message || er) + '\n' }); }
   const files = {};
   for (const f of FS.readdir(CWD)) { if (f === '.' || f === '..') continue; try { const st = FS.stat(CWD + '/' + f); if (FS.isFile(st.mode) && st.size < 2e6) files[f] = FS.readFile(CWD + '/' + f, { encoding: 'utf8' }); } catch (er) {} }
-  postMessage({ t: 'done', files });
+  sendOut(); postMessage({ t: 'done', files });
 };

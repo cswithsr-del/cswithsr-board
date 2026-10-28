@@ -124,13 +124,13 @@ export function init(o) {
   ta.addEventListener('keydown', keys);
   root.querySelectorAll('[data-lang]').forEach(b => b.onclick = () => setLang(b.dataset.lang));
   root.querySelectorAll('[data-ins]').forEach(b => b.onclick = () => insert(b.dataset.ins));
-  $('#ideRun').onclick = runIt; $('#ideStop').onclick = stopIt; $('#ideClr').onclick = () => { out.innerHTML = ''; };
+  $('#ideRun').onclick = runIt; $('#ideStop').onclick = stopIt; $('#ideClr').onclick = () => clearOut();
   $('#ideSm').onclick = () => setSize(size - 2); $('#ideLg').onclick = () => setSize(size + 2);
   $('#ideFiles').onclick = () => { root.classList.toggle('noside'); store.put('kv', 'ideSide', !root.classList.contains('noside')).catch(() => {}); };
   if (navigator.serviceWorker) navigator.serviceWorker.addEventListener && 0;
 }
 export async function open(lv, level) {
-  if (lv !== LV || !cur) { await saveNow(); LV = lv; cur = null; out.innerHTML = ''; }
+  if (lv !== LV || !cur) { await saveNow(); LV = lv; cur = null; clearOut(); }
   LEVEL = level || lv; const defaultLang = LEVEL === 'a2' ? 'py' : 'ps';
   await ensureSamples();
   size = (await store.get('kv', 'ideSize')) || 20; setSize(size);
@@ -220,11 +220,20 @@ function keys(e) {
 }
 
 /* ---------- console ---------- */
-function write(text, cls) {
-  let last = out.lastElementChild;
-  if (!last || last.tagName !== 'SPAN' || last.className !== (cls || '')) { last = document.createElement('span'); if (cls) last.className = cls; out.appendChild(last); }
-  last.textContent += text;
-  if (out.textContent.length > 200000) out.firstElementChild && out.firstElementChild.remove();
+let pend = [], pendRaf = 0, outLen = 0;
+function clearOut() { pend = []; outLen = 0; out.innerHTML = ''; }
+function write(text, cls) { pend.push([text, cls || '']); if (!pendRaf) pendRaf = requestAnimationFrame(flushOut); }
+function flushOut() {
+  pendRaf = 0; const items = pend; pend = []; if (!items.length) return;
+  // join text of the same colour first, then add it to the page once
+  const groups = []; for (const [text, cls] of items) { const g = groups[groups.length - 1]; if (g && g[1] === cls) g[0].push(text); else groups.push([[text], cls]); }
+  for (const [parts, cls] of groups) {
+    const text = parts.join(''); let last = out.lastElementChild;
+    if (!last || last.tagName !== 'SPAN' || last.className !== cls) { last = document.createElement('span'); if (cls) last.className = cls; out.appendChild(last); }
+    last.appendChild(document.createTextNode(text)); outLen += text.length;
+  }
+  // keep only the most recent output so a never-ending program cannot slow the app down
+  if (outLen > 120000) { while (outLen > 60000 && out.firstChild) { const f = out.firstChild; const n = f.textContent.length; if (n > outLen - 60000 && f.nodeType === 1 && f.childNodes.length > 1) { f.removeChild(f.firstChild); outLen -= n - f.textContent.length; } else { out.removeChild(f); outLen -= n; } } }
   out.scrollTop = out.scrollHeight; opts.changed && opts.changed();
 }
 function askInput() {
@@ -232,6 +241,7 @@ function askInput() {
     const box = document.createElement('input'); box.className = 'con-in'; box.setAttribute('aria-label', 'Program input'); box.autocapitalize = 'off'; box.autocomplete = 'off';
     out.appendChild(box); box.focus(); out.scrollTop = out.scrollHeight;
     waitInput = v => { box.remove(); waitInput = null; write(v + '\n', 'in'); res(v); };
+    inputReject = () => { box.remove(); waitInput = null; inputReject = null; res(null); };
     box.onkeydown = e => { if (e.key === 'Enter') waitInput(box.value); };
   });
 }
@@ -239,7 +249,7 @@ function setRunning(r) { running = r; $('#ideRun').hidden = !!r; $('#ideStop').h
 
 async function runIt() {
   if (running || !cur || cur.kind !== 'prog') return;
-  await saveNow(); out.innerHTML = '';
+  await saveNow(); clearOut();
   if (cur.lang === 'ps') return runPseudo();
   return runPython();
 }
@@ -247,7 +257,7 @@ async function runPseudo() {
   const state = { stop: false }; setRunning(state);
   try {
     await pseudo.run(ta.value, {
-      output: t => write(t + '\n'), input: () => askInput(), stopped: () => state.stop,
+      output: t => write(t + '\n'), input: async () => { const v = await askInput(); if (v === null || state.stop) throw new pseudo.PseudoError('Program stopped'); return v; }, stopped: () => state.stop,
       files: { read: readFile, write: writeFile }, fileChanged: () => renderSide(),
     });
     write('\n— Program finished —\n', 'dim');
@@ -282,10 +292,11 @@ async function runPython() {
   const files = Object.fromEntries((await listFiles()).map(f => [f.name, f.text]));
   setRunning({ py: true }); ensureWorker().postMessage({ t: 'run', code: ta.value, files });
 }
+let inputReject = null;
 function stopIt() {
   if (!running) return;
-  if (running.py) { if (worker) worker.terminate(); worker = null; if (waitInput) { const b = out.querySelector('.con-in'); b && b.remove(); waitInput = null; } write('\n— Stopped —\n', 'dim'); setRunning(null); }
-  else running.stop = true;
+  if (running.py) { if (worker) worker.terminate(); worker = null; pyReady = false; if (waitInput) { const b = out.querySelector('.con-in'); b && b.remove(); waitInput = null; } write('\n— Stopped —\n', 'dim'); setRunning(null); }
+  else { running.stop = true; if (inputReject) inputReject(); }   // also stops a program that is waiting for input
 }
 // warm Python up in the background when the code tab opens on Python
 export function prewarm() { if (cur && cur.lang === 'py') ensureWorker(); }

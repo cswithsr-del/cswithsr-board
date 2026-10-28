@@ -166,7 +166,11 @@ export async function run(src, io) {
   const global = { vars: new Map(), parent: null };
   const files = {};
   let steps = 0;
-  const tick = async () => { if (++steps % 400 === 0) { await new Promise(r => setTimeout(r, 0)); if (io.stopped()) throw new PseudoError('Program stopped'); } };
+  let lastYield = performance.now();
+  const tick = async () => {
+    if (io.stopped()) throw new PseudoError('Program stopped');
+    if (++steps % 50 === 0 && performance.now() - lastYield > 25) { await new Promise(r => setTimeout(r, 0)); lastYield = performance.now(); if (io.stopped()) throw new PseudoError('Program stopped'); }
+  };
 
   for (const s of prog) { if (s.s === 'proc') procs[s.name] = s; if (s.s === 'func') funcs[s.name] = s; if (s.s === 'type') types[s.name] = s; }
 
@@ -330,11 +334,11 @@ export async function run(src, io) {
         const c = await ref({ e: 'var', name: s.v, line: s.line }, env, true);
         const a = num(await ev(s.a, env), s.line, 'FOR'), b = num(await ev(s.b, env), s.line, 'FOR'), st = s.st ? num(await ev(s.st, env), s.line, 'STEP') : 1;
         if (st === 0) err('STEP cannot be 0', s.line);
-        for (let i = a; st > 0 ? i <= b : i >= b; i += st) { c.v = check(c.type, i, s.line, s.v); await exec(s.body, env); }
+        for (let i = a; st > 0 ? i <= b : i >= b; i += st) { await tick(); c.v = check(c.type, i, s.line, s.v); await exec(s.body, env); }
         return;
       }
-      case 'while': while (truth(await ev(s.c, env), s.line, 'WHILE')) await exec(s.body, env); return;
-      case 'repeat': do await exec(s.body, env); while (!truth(await ev(s.c, env), s.line, 'UNTIL')); return;
+      case 'while': while (truth(await ev(s.c, env), s.line, 'WHILE')) { await tick(); await exec(s.body, env); } return;
+      case 'repeat': do { await tick(); await exec(s.body, env); } while (!truth(await ev(s.c, env), s.line, 'UNTIL')); return;
       case 'call': { const d = procs[s.name]; if (!d) err(funcs[s.name] ? `${s.name} is a FUNCTION, so use its value, for example X ← ${s.name}(...)` : `There is no procedure called ${s.name}`, s.line); await callUser(d, s.args, env, s.line); return; }
       case 'return': throw new Ret(s.x ? await ev(s.x, env) : null);
       case 'open': {
