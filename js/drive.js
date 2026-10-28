@@ -23,6 +23,7 @@ export async function init(o) {
   // anything interrupted mid-upload goes back to the queue
   for (const j of await jobs()) if (j.status === 'uploading') { j.status = 'queued'; await saveJob(j); }
   addEventListener('online', () => pump());
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pump(); });   // try again whenever the app comes back to the front
   addEventListener('offline', () => setState({ msg: 'Waiting for internet' }));
   setInterval(() => pump(), 30000);
   pump();
@@ -99,21 +100,32 @@ export async function enqueue(job) {
   await saveJob(j); emit(); pump(); return j;
 }
 export async function remove(id) { const j = await store.get('kv', 'job:' + id); if (j && j.src.type === 'blob') await store.del('blobs', j.src.key); await store.del('kv', 'job:' + id); emit(); }
-export async function retry(id) { const j = await store.get('kv', 'job:' + id); if (j) { j.status = 'queued'; j.err = ''; await saveJob(j); emit(); pump(); } }
+export async function retry(id) { const j = await store.get('kv', 'job:' + id); if (j) { j.status = 'queued'; j.err = ''; delete j._reset; fails = 0; await saveJob(j); emit(); pump(); } }
 
+let fails = 0, retryT = 0;
 export async function pump() {
-  if (running) return; running = true;
+  if (running) return; running = true; clearTimeout(retryT);
   try {
     while (true) {
       const next = (await jobs()).find(j => j.status === 'queued' || j.status === 'uploading');
       if (!next) { setState({ msg: '' }); break; }
-      if (!navigator.onLine) { setState({ msg: 'Waiting for internet' }); break; }
+      if (!navigator.onLine) { setState({ msg: 'Waiting for internet' }); clearTimeout(retryT); retryT = setTimeout(pump, 15000); break; }
       if (!cfg.clientId && !cfg.helper) { setState({ msg: 'Connect Google Drive in Settings to start uploading' }); break; }
       if (!(await ensureToken())) { setState({ needsSignIn: !cfg.helper, msg: cfg.helper ? state.msg || 'Drive helper not reachable' : 'Tap “Connect Drive” to continue uploading' }); break; }
-      try { await upload(next); }
+      try { await upload(next); fails = 0; }
       catch (e) {
         if (e.auth) { token = null; tokenExp = 0; if (cfg.helper && !next._authRetry) { next._authRetry = 1; continue; } setState({ needsSignIn: !cfg.helper, msg: 'Tap “Connect Drive” to continue uploading' }); break; }
-        if (e.net || !navigator.onLine) { next.status = 'queued'; await saveJob(next); setState({ msg: 'Waiting for internet' }); break; }
+        if (e.net || !navigator.onLine) {
+          // Is the internet really down, or did only this upload's link fail? Ask Drive something small.
+          let netOk = false;
+          if (navigator.onLine) { try { const p = await call('https://www.googleapis.com/drive/v3/about?fields=user'); netOk = p.ok; } catch (x) {} }
+          if (netOk && !next._reset) { next._reset = 1; next.session = null; next.offset = 0; next.status = 'queued'; await saveJob(next); continue; }   // start this file's upload again
+          if (netOk) { next.status = 'error'; next.err = 'The internet works, but Drive keeps refusing this file. Tap Retry. If it fails again, take a screenshot of this message and send it to Claude. [' + (e.where || '?') + ': ' + (e.detail || e.message) + ']'; await saveJob(next); emit(); continue; }
+          next.status = 'queued'; await saveJob(next);
+          fails++; const wait = Math.min(60, [5, 10, 20, 30, 60][Math.min(fails - 1, 4)]);
+          setState({ msg: (navigator.onLine ? 'Connection to Drive failed. Trying again in ' + wait + ' s' : 'Waiting for internet') + (e.message && e.message !== 'Network' ? ' (' + e.message + ')' : '') });
+          clearTimeout(retryT); retryT = setTimeout(pump, wait * 1000); break;
+        }
         next.status = 'error'; next.err = e.message; await saveJob(next); emit();
       }
     }
@@ -123,7 +135,7 @@ export async function pump() {
 async function call(url, init = {}) {
   let r;
   try { r = await fetch(url, { ...init, headers: { Authorization: 'Bearer ' + token, ...(init.headers || {}) } }); }
-  catch (e) { const er = new Error('Network'); er.net = true; throw er; }
+  catch (e) { const er = new Error('Network'); er.net = true; er.where = /upload_id|uploadType/.test(url) ? 'upload' : /about/.test(url) ? 'check' : 'folders'; er.detail = e.message; throw er; }
   if (r.status === 401) { const er = new Error('Signed out'); er.auth = true; throw er; }
   return r;
 }
@@ -175,7 +187,9 @@ async function upload(j) {
   }
   while (j.offset < total) {
     const end = Math.min(j.offset + CHUNK, total);
-    const r = await call(j.session, { method: 'PUT', headers: { 'Content-Range': `bytes ${j.offset}-${end - 1}/${total}` }, body: blob.slice(j.offset, end) });
+    let body;   // read this piece first, so a damaged file on the tablet is not mistaken for no internet
+    try { body = await blob.slice(j.offset, end).arrayBuffer(); } catch (x) { throw new Error('This recording could not be read from the tablet storage. Record again or download it from Recordings.'); }
+    const r = await call(j.session, { method: 'PUT', headers: { 'Content-Range': `bytes ${j.offset}-${end - 1}/${total}` }, body });
     if (r.status === 200 || r.status === 201) return finish(j, await r.json());
     if (r.status === 308) { const rg = r.headers.get('Range'); j.offset = rg ? +rg.split('-')[1] + 1 : end; }
     else if (r.status === 404 || r.status === 410) { j.session = null; j.offset = 0; await saveJob(j); throw new Error('Upload expired. Tap Retry to start it again.'); }
