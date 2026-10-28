@@ -47,14 +47,30 @@ function place() {
   el.classList.toggle('circle', state.shape === 'circle');
   video.style.transform = state.mirror ? 'scaleX(-1)' : 'none';
 }
+// A USB webcam shows up in Chrome as "facing external" (or with no front/back in its name)
+async function externalCam() {
+  try {
+    const l = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput' && d.label);
+    return l.find(d => /external|usb|uvc|webcam/i.test(d.label)) || l.find(d => !/front|back|rear|user|environment/i.test(d.label)) || null;
+  } catch (e) { return null; }
+}
+let usingExt = false;
+if (navigator.mediaDevices) navigator.mediaDevices.addEventListener('devicechange', async () => {
+  if (!stream) return; const dev = (await store.get('kv', 'dev')) || {}; if (dev.cam) return;
+  const ext = await externalCam();
+  if (ext && !usingExt) { await restartNow(); toast('USB webcam found. Using it now.'); }
+  else if (!ext && usingExt) { await restartNow(); toast('USB webcam unplugged. Using the front camera.'); }
+});
+async function restartNow() { stop(); await toggle(); }
 export async function toggle() {
   if (stream) { stop(); return false; }
   try {
     const dev = (await store.get('kv', 'dev')) || {};
     const v = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
-    if (dev.cam) v.deviceId = { exact: dev.cam }; else v.facingMode = 'user';
+    const ext = dev.cam ? null : await externalCam(); usingExt = !!ext;
+    if (dev.cam) v.deviceId = { exact: dev.cam }; else if (ext) v.deviceId = { exact: ext.deviceId }; else v.facingMode = 'user';
     try { stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false }); }
-    catch (e) { if (!dev.cam) throw e; delete v.deviceId; v.facingMode = 'user'; stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false }); toast('The chosen camera is not connected, so the front camera is used.'); }
+    catch (e) { if (!dev.cam && !ext) throw e; usingExt = false; delete v.deviceId; v.facingMode = 'user'; stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false }); toast('The chosen camera is not connected, so the front camera is used.'); }
     video.srcObject = stream; await video.play().catch(() => {});
     state.on = true; el.hidden = false; place(); return true;
   } catch (e) {
