@@ -44,7 +44,14 @@ export async function ensureToken() {
   if (cfg.helper && cfg.hkey) { try { return await helperToken(); } catch (e) { setState({ msg: e.message }); return false; } }
   return false;
 }
-export async function testHelper() { token = null; tokenExp = 0; await helperToken(); return cfg.email; }
+export async function testHelper() {
+  token = null; tokenExp = 0; await helperToken();
+  try {   // does the helper's pass include Drive? (the Drive box must be ticked when allowing the script)
+    const r = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token));
+    if (r.ok) { const j = await r.json(); if (!/auth\/drive(\s|$)/.test(j.scope || '')) { token = null; tokenExp = 0; throw new Error('The helper works but has no Drive permission. In your script tap Run on authorize again and tick “Select all” (the Drive box) before Continue. If it does not ask, first remove the script at myaccount.google.com/connections.'); } }
+  } catch (e) { if (/no Drive permission/.test(e.message)) throw e; }
+  return cfg.email;
+}
 export function newKey() { const a = new Uint8Array(24); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 export const helperScript = key => `// CSwithSR Board: Drive helper. Keep this key secret.
 const KEY = '${key}';
@@ -55,6 +62,8 @@ function doGet(e) {
 }
 // Run this once from the editor to give permission.
 function authorize() { DriveApp.getRootFolder(); Logger.log(ScriptApp.getOAuthToken() ? 'Ready' : 'Not ready'); }
+// Never runs. It only tells Google that the helper needs to add files to Drive.
+function needsDrive_() { DriveApp.createFolder('x').setTrashed(true); }
 `;
 
 /* ---------- sign-in (Google Identity Services) ---------- */
@@ -142,7 +151,9 @@ async function call(url, init = {}) {
 async function why(r, what) {
   let msg = '', reason = '';
   try { const j = await r.json(); msg = j.error && j.error.message || ''; reason = (j.error && j.error.errors && j.error.errors[0] && j.error.errors[0].reason) || (j.error && j.error.status) || ''; } catch (e) {}
-  if (r.status === 403 && /insufficient|scope|PERMISSION_DENIED/i.test(reason + msg) && !/has not been used|disabled/i.test(msg)) { token = null; setState({ needsSignIn: true, msg: 'Drive permission missing. Tap Connect Drive and tick the Drive box.' }); const e = new Error('Drive permission missing: tap Connect Drive and tick the Drive box, then Retry.'); throw e; }
+  if (r.status === 403 && /insufficient|scope|PERMISSION_DENIED/i.test(reason + msg) && !/has not been used|disabled/i.test(msg)) { token = null; tokenExp = 0;
+    if (cfg.helper) { setState({ msg: 'The Drive helper has no Drive permission' }); throw new Error('The Drive helper has no Drive permission. Open your script, Run authorize, tick “Select all”, then tap Test in Settings and Retry here.'); }
+    setState({ needsSignIn: true, msg: 'Drive permission missing. Tap Connect Drive and tick the Drive box.' }); const e = new Error('Drive permission missing: tap Connect Drive and tick the Drive box, then Retry.'); throw e; }
   if (/has not been used|is disabled|accessNotConfigured|SERVICE_DISABLED/i.test(msg + reason)) throw new Error('The Google Drive API is not switched on in your Google Cloud project. Enable it, wait 2 minutes, then Retry.');
   throw new Error(`${what} (${r.status}${msg ? ': ' + msg.slice(0, 140) : ''})`);
 }
