@@ -1,5 +1,5 @@
 // Offline cache: every file of the app is stored on the tablet. Bump VERSION when the app changes.
-const VERSION = 'cswithsr-board-v28';
+const VERSION = 'cswithsr-board-v29';
 const FILES = [
   './',
   "app.css",
@@ -15,6 +15,7 @@ const FILES = [
   "js/board.js",
   "js/cam.js",
   "js/drive.js",
+  "js/drivebrowse.js",
   "js/export.js",
   "js/ide.js",
   "js/main.js",

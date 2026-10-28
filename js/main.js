@@ -384,6 +384,7 @@ function inlineEdit(el, value, done) {
   inp.onkeydown = e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') { fin = true; renderLib(); } }; inp.onblur = go;
 }
 $('#recsBtn').onclick = () => { libView = libView === 'recs' ? 'topics' : 'recs'; renderLib(); };
+$('#driveBtn').onclick = openDrive;
 $('#upsBtn').onclick = () => { libView = libView === 'ups' ? 'topics' : 'ups'; renderLib(); };
 
 /* ---------- rails ---------- */
@@ -459,8 +460,8 @@ function paint() {
   colorBtns.forEach((b, i) => b.classList.toggle('on', COLORS[i] === t.c)); sizeBtns.forEach((b, i) => b.classList.toggle('on', i === t.sz));
   Object.entries(toolBtns).forEach(([k, b]) => b.classList.toggle('on', k === t.t)); toolBtns.pen.classList.toggle('auto', !!t.auto); store.put('kv', 'tool', { ...t }).catch(() => {});
 }
-$('#file').addEventListener('change', async e => {
-  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+$('#file').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) insertFile(f); });
+async function insertFile(f) {
   if (f.type.startsWith('image/')) return A.insertImage(f);
   const target = A, n = await target.pdfPages(f).catch(() => 0); if (!n) return target.importPdf(f);
   const w = document.createElement('div'); w.className = 'modalWrap';
@@ -473,7 +474,13 @@ $('#file').addEventListener('change', async e => {
   q('#pdNo').onclick = () => w.remove();
   q('#pdPages').onclick = () => { w.remove(); target.importPdf(f); };
   q('#pdPic').onclick = async () => { const pn = n > 1 ? +q('#pdN').value || 1 : 1; w.remove(); toast('Placing the page…'); target.insertImage(await target.pdfPageImage(f, pn)); };
-});
+}
+async function openDrive() {
+  (await import('./drivebrowse.js')).open({ toast, openFile: async f => {
+    if (!$('#lib').hidden) { await openTopic(QUICK); toast('Opened on the Quick board'); }
+    insertFile(f);
+  } });
+}
 let pop = null;
 function closePop() { if (pop) { pop.remove(); pop = null; } }
 function placePop(anchor) {

@@ -177,7 +177,7 @@ async function upload(j) {
     else { j.session = null; j.offset = 0; }
   }
   if (!j.session) {
-    const parent = await folderFor([cfg.root || 'CSwithSR Classes', ...j.path]);
+    const parent = j.parentId || await folderFor([cfg.root || 'CSwithSR Classes', ...j.path]);
     const r = await call('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
       method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': j.mime, 'X-Upload-Content-Length': String(total) },
       body: JSON.stringify({ name: j.name, parents: [parent], mimeType: j.mime }) });
@@ -204,5 +204,13 @@ async function finish(j, info) {
   if (j.src.type === 'rec') { const m = await store.get('recs', j.src.id); if (m) { m.drive = j.link || 'uploaded'; await store.put('recs', m.id, m); } }
   emit();
 }
+// Drive browser: a signed-in request, and the app's own top folder
+export async function api(url, init = {}) {
+  if (!(await ensureToken())) { const e = new Error(cfg.helper ? 'Drive helper not reachable. Check the internet.' : 'Connect Google Drive first (Drive uploads, then Connect Drive).'); e.auth = true; throw e; }
+  try { return await call(url, init); }
+  catch (e) { if (e.auth) { token = null; tokenExp = 0; if (await ensureToken()) return call(url, init); } if (e.net) throw new Error('Could not reach Google Drive. Check the internet.'); throw e; }
+}
+export const rootFolderId = () => folderFor([cfg.root || 'CSwithSR Classes']);
+export const fullAccess = () => !!cfg.helper;
 // used by automated tests only
 export function _testToken(t) { token = t; tokenExp = Date.now() + 3e6; cfg.email = cfg.email || 'test@example.com'; }
