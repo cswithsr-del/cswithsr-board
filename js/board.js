@@ -9,7 +9,8 @@ export const PAGE_COLORS = [
   ['#0f0f13', 'Board black'], ['#0b0726', 'CSwithSR navy'], ['#101a3a', 'Deep blue'], ['#12301f', 'Chalk green'],
   ['#22252c', 'Slate'], ['#ffffff', 'White'], ['#f5f1ea', 'Cream'], ['#e8f4ff', 'Sky']
 ];
-export const PATTERNS = [['lined', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['plain', 'Plain']];
+export const PATTERNS = [['narrow', 'Narrow lines'], ['lined', 'Lined'], ['wide', 'Wide lines'], ['grid', 'Grid'], ['dots', 'Dots'], ['plain', 'Plain']];
+const LINE_STEP = { narrow: 34, lined: 46, wide: 64 };
 const LEGACY = { dark: ['#0f0f13', 'lined'], white: ['#ffffff', 'lined'], grid: ['#0f0f13', 'grid'], plain: ['#0f0f13', 'plain'] };
 
 let cv, ctx, boardEl, opts;
@@ -254,8 +255,8 @@ function drawPageBg(p, top, c = ctx, live = true) {
   c.fillStyle = p.bg; c.fillRect(0, top, DOCW, p.h);
   const light = lum(p.bg) > .55; const ln = light ? 'rgba(70,100,150,.28)' : 'rgba(255,255,255,.14)';
   drawWatermark(p, top, c, light);
-  if (p.pat === 'lined' || p.pat === 'grid') {
-    c.strokeStyle = ln; c.lineWidth = p.pat === 'grid' ? 1 : 1.3; c.beginPath(); const step = p.pat === 'grid' ? 40 : 46;
+  if (LINE_STEP[p.pat] || p.pat === 'grid') {
+    c.strokeStyle = ln; c.lineWidth = p.pat === 'grid' ? 1 : p.pat === 'narrow' ? 1.1 : 1.3; c.beginPath(); const step = p.pat === 'grid' ? 40 : LINE_STEP[p.pat];
     for (let y = p.pat === 'grid' ? step : 110; y < p.h; y += step) { c.moveTo(0, top + y); c.lineTo(DOCW, top + y); }
     if (p.pat === 'grid') for (let x = step; x < DOCW; x += step) { c.moveTo(x, top); c.lineTo(x, top + p.h); }
     c.stroke();

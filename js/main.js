@@ -487,7 +487,7 @@ function placePop(anchor) {
   document.body.appendChild(pop); const r = anchor.getBoundingClientRect();
   pop.style.top = Math.max(8, Math.min(r.top, innerHeight - pop.offsetHeight - 8)) + 'px'; pop.style.right = (innerWidth - r.left + 8) + 'px';
 }
-const PAGE_ICONS = { lined: '<path d="M4 8h16M4 12h16M4 16h16"/>', grid: '<path d="M4 8h16M4 12h16M4 16h16M8 4v16M12 4v16M16 4v16"/>', dots: '<circle cx="8" cy="8" r=".6"/><circle cx="12" cy="8" r=".6"/><circle cx="16" cy="8" r=".6"/><circle cx="8" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="16" cy="12" r=".6"/><circle cx="8" cy="16" r=".6"/><circle cx="12" cy="16" r=".6"/><circle cx="16" cy="16" r=".6"/>', plain: '' };
+const PAGE_ICONS = { narrow: '<path d="M4 6h16M4 9h16M4 12h16M4 15h16M4 18h16"/>', lined: '<path d="M4 8h16M4 12h16M4 16h16"/>', wide: '<path d="M4 7h16M4 13h16M4 19h16"/>', grid: '<path d="M4 8h16M4 12h16M4 16h16M8 4v16M12 4v16M16 4v16"/>', dots: '<circle cx="8" cy="8" r=".6"/><circle cx="12" cy="8" r=".6"/><circle cx="16" cy="8" r=".6"/><circle cx="8" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="16" cy="12" r=".6"/><circle cx="8" cy="16" r=".6"/><circle cx="12" cy="16" r=".6"/><circle cx="16" cy="16" r=".6"/>', plain: '' };
 function openPop(anchor) {
   closePop(); pop = document.createElement('div'); pop.className = 'pop pagepop';
   const cur = A.currentPage() || {}; const isPdf = cur.k === 'pdf';

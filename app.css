@@ -87,7 +87,7 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .libtop img{height:56px;filter:drop-shadow(0 0 10px rgba(242,181,58,.25))}
 .libtitle{flex:1;min-width:200px}
 .libtitle h1{margin:0;font-size:clamp(22px,2.6vw,32px);letter-spacing:.2px}
-.libtitle p{margin:2px 0 0;color:var(--muted);font-size:14px}
+.libtitle p{margin:2px 0 0;color:var(--muted);font-size:15px}
 .libactions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 #search{width:220px;max-width:100%}
 .cont{display:flex;align-items:center;gap:16px;background:linear-gradient(90deg,rgba(242,181,58,.16),rgba(18,13,54,.85) 60%);border:1px solid rgba(242,181,58,.45);border-radius:16px;padding:14px 18px;cursor:pointer;text-align:left;color:var(--ink);font-family:var(--display);width:100%}
