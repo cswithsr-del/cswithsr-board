@@ -586,17 +586,56 @@ async function openOverview() {
 }
 /* selection toolbar */
 const selBar = document.createElement('div'); selBar.className = 'selbar'; selBar.hidden = true;
-selBar.innerHTML = '<span id="selN"></span><button id="selDup">Duplicate</button><button id="selDel" class="danger">Delete</button><button id="selDone">Done</button>';
+selBar.innerHTML = '<span id="selN"></span><button id="selCrop" hidden>✂ Crop</button><button id="selDup">Duplicate</button><button id="selDel" class="danger">Delete</button><button id="selDone">Done</button>';
 document.body.appendChild(selBar);
 selBar.querySelector('#selDup').onclick = () => selOwner.selDuplicate();
+selBar.querySelector('#selCrop').onclick = () => openCrop(selOwner);
 selBar.querySelector('#selDel').onclick = () => selOwner.selDelete();
 selBar.querySelector('#selDone').onclick = () => selOwner.clearSel();
 function onSelection(r, inst = board) {
   if (!r) { if (selOwner === inst) selBar.hidden = true; return; }
   selOwner = inst;
-  selBar.hidden = false; selBar.querySelector('#selN').textContent = r.count + ' selected · tap a colour to recolour';
+  selBar.hidden = false; selBar.querySelector('#selCrop').hidden = !r.picture;
+  selBar.querySelector('#selN').textContent = r.picture ? 'Picture' : r.count + ' selected · tap a colour to recolour';
   const w = selBar.offsetWidth, h = selBar.offsetHeight; let top = r.top - h - 10; if (top < 8) top = Math.min(innerHeight - h - 8, r.bottom + 10);
   selBar.style.left = Math.max(8, Math.min(innerWidth - w - 8, (r.left + r.right) / 2 - w / 2)) + 'px'; selBar.style.top = top + 'px';
+}
+
+/* ---------- crop a picture ---------- */
+async function openCrop(inst) {
+  const o = inst.selPicture(); if (!o) return; const im = await inst.pictureOf(o); if (!im) return toast('This picture could not be loaded.');
+  let r = (o.c || [0, 0, 1, 1]).slice();   // crop box as fractions of the whole picture
+  const w = document.createElement('div'); w.className = 'modalWrap cropw';
+  w.innerHTML = `<div class="cropbox" role="dialog" aria-modal="true" aria-label="Crop picture">
+    <div class="cropstage"><img alt="" draggable="false"><div class="croprect">${['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(k => `<i class="h ${k}" data-h="${k}"></i>`).join('')}</div></div>
+    <div class="row cropacts"><span class="help">Drag the edges or corners. Drag inside to move the box.</span><button class="ghost" id="crFull">Whole picture</button><button class="ghost" id="crNo">Cancel</button><button class="primary" id="crOk">Crop</button></div></div>`;
+  document.body.appendChild(w);
+  const img = w.querySelector('img'), stage = w.querySelector('.cropstage'), rect = w.querySelector('.croprect');
+  img.src = im.src;
+  const fit = () => { const mw = innerWidth * .9, mh = innerHeight - 170, nw = im.naturalWidth, nh = im.naturalHeight, k = Math.min(mw / nw, mh / nh); stage.style.width = nw * k + 'px'; stage.style.height = nh * k + 'px'; place(); };
+  const place = () => Object.assign(rect.style, { left: r[0] * 100 + '%', top: r[1] * 100 + '%', width: r[2] * 100 + '%', height: r[3] * 100 + '%' });
+  fit(); addEventListener('resize', fit);
+  const MIN = .04; let drag = null;
+  rect.addEventListener('pointerdown', e => {
+    e.preventDefault(); const b = stage.getBoundingClientRect(); rect.setPointerCapture(e.pointerId);
+    drag = { h: e.target.dataset.h || 'move', x: e.clientX, y: e.clientY, r: r.slice(), W: b.width, H: b.height };
+  });
+  rect.addEventListener('pointermove', e => {
+    if (!drag) return; const dx = (e.clientX - drag.x) / drag.W, dy = (e.clientY - drag.y) / drag.H, o0 = drag.r; let [x, y, ww, hh] = o0;
+    if (drag.h === 'move') { x = Math.max(0, Math.min(1 - ww, o0[0] + dx)); y = Math.max(0, Math.min(1 - hh, o0[1] + dy)); }
+    else {
+      let L = o0[0], T = o0[1], R = o0[0] + o0[2], B = o0[1] + o0[3];
+      if (drag.h.includes('w')) L = Math.max(0, Math.min(R - MIN, L + dx)); if (drag.h.includes('e')) R = Math.min(1, Math.max(L + MIN, R + dx));
+      if (drag.h.includes('n')) T = Math.max(0, Math.min(B - MIN, T + dy)); if (drag.h.includes('s')) B = Math.min(1, Math.max(T + MIN, B + dy));
+      x = L; y = T; ww = R - L; hh = B - T;
+    }
+    r = [x, y, ww, hh]; place();
+  });
+  ['pointerup', 'pointercancel'].forEach(t => rect.addEventListener(t, () => drag = null));
+  const close = () => { removeEventListener('resize', fit); w.remove(); };
+  w.querySelector('#crFull').onclick = () => { r = [0, 0, 1, 1]; place(); };
+  w.querySelector('#crNo').onclick = close;
+  w.querySelector('#crOk').onclick = () => { inst.cropPicture(r); close(); toast('Picture cropped. Use Crop again to change it, or undo.'); };
 }
 
 /* ---------- recording ---------- */

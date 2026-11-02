@@ -300,3 +300,19 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .lecfs{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:grid;gap:8px}
 .lecfs legend{font:700 13px var(--display);color:var(--ink);padding:0 6px}
 .lecgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}
+
+/* crop a picture */
+.cropw{z-index:45;background:rgba(3,1,15,.88)}
+.cropbox{display:grid;gap:18px;justify-items:center;isolation:isolate}
+.cropstage{position:relative;touch-action:none;user-select:none;-webkit-user-select:none}
+.cropstage img{width:100%;height:100%;display:block;border-radius:4px;pointer-events:none}
+.croprect{position:absolute;border:2px solid var(--acc);box-shadow:0 0 0 9999px rgba(3,1,15,.62);cursor:move;touch-action:none}
+.croprect::before,.croprect::after{content:"";position:absolute;inset:0;border:1px dashed rgba(255,255,255,.35);pointer-events:none}
+.croprect::before{left:33.3%;right:33.3%;border-top:0;border-bottom:0}
+.croprect::after{top:33.3%;bottom:33.3%;border-left:0;border-right:0}
+.croprect .h{position:absolute;width:24px;height:24px;margin:-12px 0 0 -12px;background:var(--acc);border:2px solid #07021f;border-radius:50%;touch-action:none;z-index:1}
+.croprect .nw{left:0;top:0;cursor:nwse-resize}.croprect .n{left:50%;top:0;cursor:ns-resize}.croprect .ne{left:100%;top:0;cursor:nesw-resize}
+.croprect .e{left:100%;top:50%;cursor:ew-resize}.croprect .se{left:100%;top:100%;cursor:nwse-resize}.croprect .s{left:50%;top:100%;cursor:ns-resize}
+.croprect .sw{left:0;top:100%;cursor:nesw-resize}.croprect .w{left:0;top:50%;cursor:ew-resize}
+.cropacts{justify-content:center;align-items:center;position:relative;z-index:2;background:#120d36;border:1px solid var(--line);border-radius:14px;padding:10px 14px}
+.cropacts .help{color:var(--muted);font-size:13px}

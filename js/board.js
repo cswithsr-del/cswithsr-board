@@ -103,7 +103,7 @@ function save() {
   saveT = setTimeout(() => { saveT = 0; if (!topic || topic.id !== id || loading) return; saveNow().catch(e => opts.toast('Could not save notes: ' + e.message)); }, 900);
 }
 export async function flush() { if (saveT) { clearTimeout(saveT); saveT = 0; if (!loading) await saveNow(); } }
-const pageJSON = () => pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0, gid: st.gid })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h })) }));
+const pageJSON = () => pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0, gid: st.gid })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h, ...(o.c ? { c: o.c } : {}) })) }));
 async function saveNow() {
   if (!topic || loading) return;
   const id = topic.id, strokes = pages.reduce((a, p) => a + p.s.length, 0);
@@ -271,8 +271,13 @@ function loadImg(key) {
   const p = store.get('blobs', 'img:' + key).then(blob => new Promise(ok => { if (!blob) return ok(null); const im = new Image(); im.onload = () => { p.img = im; ok(im); req(); }; im.onerror = () => ok(null); im.src = URL.createObjectURL(blob); }));
   imgCache.set(key, p); return p;
 }
+// a picture may be cropped: o.c = [x, y, w, h] as fractions of the original picture
+function drawPic(c, im, o) {
+  if (o.c) { const W = im.naturalWidth || im.width, H = im.naturalHeight || im.height; c.drawImage(im, o.c[0] * W, o.c[1] * H, o.c[2] * W, o.c[3] * H, o.x, o.y, o.w, o.h); }
+  else c.drawImage(im, o.x, o.y, o.w, o.h);
+}
 function drawImages(p, c) {
-  for (const o of p.im || []) { const pr = loadImg(o.key); if (pr.img) c.drawImage(pr.img, o.x, o.y, o.w, o.h); else { c.fillStyle = 'rgba(255,255,255,.06)'; c.fillRect(o.x, o.y, o.w, o.h); } }
+  for (const o of p.im || []) { const pr = loadImg(o.key); if (pr.img) drawPic(c, pr.img, o); else { c.fillStyle = 'rgba(255,255,255,.06)'; c.fillRect(o.x, o.y, o.w, o.h); } }
 }
 function drawStroke(st, c = ctx) { c.strokeStyle = st.c; c.globalAlpha = st.t === 'hl' ? .38 : 1; for (const g of st.g) { c.lineWidth = g.w; c.stroke(g.p); } c.globalAlpha = 1; }
 function selBox() { const s = sel, pad = 10; return [s.bb[0] - pad, s.bb[1] - pad + tops[pages.indexOf(s.page)], s.bb[2] + pad, s.bb[3] + pad + tops[pages.indexOf(s.page)]]; }
@@ -372,7 +377,7 @@ function reportSel() {
   if (!opts) return;
   if (!sel || !pages.includes(sel.page)) { sel = null; opts.selection && opts.selection(null); return; }
   const [a, b, c, d] = selBox(), r = cv.getBoundingClientRect(), s = sc();
-  opts.selection && opts.selection({ left: r.left + (a - view.sx) * s, top: r.top + (b - view.sy) * s, right: r.left + (c - view.sx) * s, bottom: r.top + (d - view.sy) * s, count: sel.items.length + (sel.imgs || []).length });
+  opts.selection && opts.selection({ left: r.left + (a - view.sx) * s, top: r.top + (b - view.sy) * s, right: r.left + (c - view.sx) * s, bottom: r.top + (d - view.sy) * s, count: sel.items.length + (sel.imgs || []).length, picture: !!selPicture() });
 }
 function selBB() { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const st of sel.items) { a = Math.min(a, st.bb[0] - st.w / 2); b = Math.min(b, st.bb[1] - st.w / 2); c = Math.max(c, st.bb[2] + st.w / 2); d = Math.max(d, st.bb[3] + st.w / 2); }
   for (const o of sel.imgs || []) { a = Math.min(a, o.x); b = Math.min(b, o.y); c = Math.max(c, o.x + o.w); d = Math.max(d, o.y + o.h); } sel.bb = [a, b, c, d]; }
@@ -390,6 +395,21 @@ function hitSel(x, y) {
   for (const [cx, cy, ox, oy] of corners) if (Math.hypot(x - cx, y - cy) < h) return { kind: 'scale', ox, oy: oy - tops[pages.indexOf(sel.page)], cx, cy: cy - tops[pages.indexOf(sel.page)] };
   if (x >= a && x <= c && y >= b && y <= d) return { kind: 'move' };
   return null;
+}
+export function selPicture() { return sel && !sel.items.length && sel.imgs && sel.imgs.length === 1 ? sel.imgs[0] : null; }
+export const pictureOf = o => loadImg(o.key);
+// crop the selected picture; c = [x, y, w, h] as fractions of the original (null = whole picture)
+export function cropPicture(c) {
+  const o = selPicture(); if (!o) return; const old = o.c || [0, 0, 1, 1], nc = c || [0, 0, 1, 1];
+  const before = { x: o.x, y: o.y, w: o.w, h: o.h, c: o.c || null };
+  const kx = o.w / old[2], ky = o.h / old[3];   // page units per whole-picture fraction
+  Object.assign(o, { x: o.x + (nc[0] - old[0]) * kx, y: o.y + (nc[1] - old[1]) * ky, w: nc[2] * kx, h: nc[3] * ky });
+  if (c && !(c[0] <= 0 && c[1] <= 0 && c[2] >= 1 && c[3] >= 1)) o.c = nc.map(v => +v.toFixed(5)); else delete o.c;
+  const page = sel.page, ph = page.h;   // keep it on the page
+  if (o.w > DOCW) { const k = DOCW / o.w; o.w *= k; o.h *= k; } if (o.h > ph) { const k = ph / o.h; o.w *= k; o.h *= k; }
+  o.x = Math.max(0, Math.min(DOCW - o.w, o.x)); o.y = Math.max(0, Math.min(ph - o.h, o.y));
+  undo.push({ t: 'crop', o, before, after: { x: o.x, y: o.y, w: o.w, h: o.h, c: o.c || null } }); redo = [];
+  touched.add(page.id); selBB(); setSel(sel); save();
 }
 function snapUndo(page, fn) { const s0 = page.s.slice(), i0 = (page.im || []).slice(); fn(); undo.push({ t: 'snap', page, s0, i0, s1: page.s.slice(), i1: (page.im || []).slice() }); redo = []; touched.add(page.id); save(); }
 export function selDelete() { if (!sel) return; const S = sel; snapUndo(S.page, () => { S.page.s = S.page.s.filter(st => !S.items.includes(st)); S.page.im = (S.page.im || []).filter(o => !(S.imgs || []).includes(o)); }); setSel(null); }
@@ -628,6 +648,7 @@ function apply(a, dir) {
   else if (a.t === 'clear') a.page.s = fwd ? [] : a.old;
   else if (a.t === 'strokes') a.items.forEach(it => it.page.s = (fwd ? it.after : it.before).slice());
   else if (a.t === 'xform') { for (const it of a.items) { const [p, w] = fwd ? it.after : it.before; it.st.p = p; it.st.w = w; build(it.st); } for (const it of a.imgs || []) { const r = fwd ? it.after : it.before; Object.assign(it.o, { x: r[0], y: r[1], w: r[2], h: r[3] }); } }
+  else if (a.t === 'crop') { const v = fwd ? a.after : a.before; Object.assign(a.o, { x: v.x, y: v.y, w: v.w, h: v.h }); if (v.c) a.o.c = v.c; else delete a.o.c; if (sel) selBB(); }
   else if (a.t === 'snap') { a.page.s = (fwd ? a.s1 : a.s0).slice(); a.page.im = (fwd ? a.i1 : a.i0).slice(); }
   else if (a.t === 'color') a.items.forEach((st, i) => st.c = fwd ? a.after[i] : a.before[i]);
   else if (a.t === 'pages') { pages = fwd ? a.after.slice() : a.before.slice(); layout(); clampView(); }
@@ -680,7 +701,7 @@ export async function renderPage(i, W) {
     x.setTransform(k, 0, 0, k, 0, 0);
   } else { x.setTransform(k, 0, 0, k, 0, 0); drawPageBg(p, 0, x, false); }
   x.lineCap = 'round'; x.lineJoin = 'round';
-  for (const o of p.im || []) { const im = await loadImg(o.key); if (im) x.drawImage(im, o.x, o.y, o.w, o.h); }
+  for (const o of p.im || []) { const im = await loadImg(o.key); if (im) drawPic(x, im, o); }
   for (const st of p.s) drawStroke(st, x);
   return c;
 }
