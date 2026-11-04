@@ -1,5 +1,5 @@
 // Offline cache: every file of the app is stored on the tablet. Bump VERSION when the app changes.
-const VERSION = 'cswithsr-board-v37';
+const VERSION = 'cswithsr-board-v38';
 const FILES = [
   './',
   "app.css",
@@ -29,7 +29,8 @@ const FILES = [
   "vendor/pdf.min.js",
   "vendor/pdf.worker.min.js",
 ];
-self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
+// cache: 'reload' skips the browser's 10-minute copy of each file, so an update never stores old files
+self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION && k !== PYCACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 // Python's input(): the code worker waits on /__stdin__ until the app sends what the user typed
 const waiting = new Map(), early = new Map();

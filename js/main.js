@@ -709,9 +709,10 @@ addEventListener('beforeunload', e => { if (rec.isRecording()) { e.preventDefaul
 /* ---------- settings ---------- */
 async function openSettings() {
   const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate().catch(() => null) : null;
+  const ver = await (self.caches ? caches.keys() : Promise.resolve([])).then(ks => (ks.find(k => k.startsWith('cswithsr-board-v')) || '').replace('cswithsr-board-', '')).catch(() => '');
   const w = document.createElement('div'); w.className = 'modalWrap';
   w.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="st">
-   <h2 id="st">Settings</h2>
+   <h2 id="st">Settings ${ver ? `<span style="font-size:12px;font-weight:600;color:var(--muted)">app version ${ver.replace('v', '')}</span>` : ''}</h2>
    <label for="sCamSize">Camera window size<select id="sCamSize"><option value=".14">Small</option><option value=".19">Medium</option><option value=".26">Large</option><option value=".34">Extra large</option></select></label>
    <label for="sShape">Camera window shape<select id="sShape"><option value="rounded">Rounded rectangle</option><option value="circle">Circle</option></select></label>
    <h2 style="font-size:16px;margin-top:6px">Camera and microphone</h2>
@@ -831,7 +832,20 @@ document.addEventListener('keydown', e => {
   paint();
   store.persist();
   showLib(true);
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    // look for a new version every time the app opens or comes back to the front; switch to it as soon as it is ready
+    const had = !!navigator.serviceWorker.controller; let reloading = false;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+      const check = () => reg.update().catch(() => {}); check();
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+    }).catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!had || reloading) return;
+      if (rec.isRecording()) { toast('A new version of the app is ready. It loads after this recording.'); return; }
+      reloading = true; sessionStorage.setItem('justUpdated', '1'); location.reload();
+    });
+    if (sessionStorage.getItem('justUpdated')) { sessionStorage.removeItem('justUpdated'); setTimeout(() => toast('App updated to the latest version'), 800); }
+  }
 })();
 
 /* ---------- send a class to Drive ---------- */
