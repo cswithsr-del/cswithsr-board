@@ -316,3 +316,10 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .croprect .sw{left:0;top:100%;cursor:nesw-resize}.croprect .w{left:0;top:50%;cursor:ew-resize}
 .cropacts{justify-content:center;align-items:center;position:relative;z-index:2;background:#120d36;border:1px solid var(--line);border-radius:14px;padding:10px 14px}
 .cropacts .help{color:var(--muted);font-size:13px}
+
+/* premium recording prompt */
+.rlopts{display:grid;gap:10px;margin:6px 0 12px}
+.rlopt{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:14px 16px;border-radius:14px;border:1.5px solid rgba(242,181,58,.35);background:rgba(255,255,255,.04);color:var(--text,#F5F1EA);font:inherit;cursor:pointer}
+.rlopt b{font-size:16px}.rlopt span{font-size:13px;opacity:.75}
+.rlopt.last{border-color:#F2B53A;background:rgba(242,181,58,.12)}
+.cdown{position:fixed;inset:0;display:grid;place-items:center;z-index:99999;background:rgba(10,17,45,.55);color:#F2B53A;font:800 160px "Space Grotesk",sans-serif;pointer-events:none}

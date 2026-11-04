@@ -16,10 +16,14 @@ function pickMime() {
   const c = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
   return c.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
 }
-export async function start(topic) {
+// layout: 'normal' = what is on the screen; 'premium' = 16:9 frame with the board on the left and an empty green camera box on the right
+export const PREMIUM = { ref: [1920, 1080], slot: { x: 1376, y: 112, w: 504, h: 896 } };
+export async function start(topic, o = {}) {
   if (rec) return;
-  const outW = Math.min(1600, Math.round(innerWidth * Math.min(devicePixelRatio || 1, 2))) & ~1;
-  const outH = Math.round(outW * innerHeight / innerWidth) & ~1;
+  const layout = o.layout === 'premium' ? 'premium' : 'normal';
+  let outW = Math.min(1600, Math.round(innerWidth * Math.min(devicePixelRatio || 1, 2))) & ~1;
+  let outH = Math.round(outW * innerHeight / innerWidth) & ~1;
+  if (layout === 'premium') { outW = o.width === 1600 ? 1600 : 1920; outH = Math.round(outW * 9 / 16) & ~1; }
   const cv = document.createElement('canvas'); cv.width = outW; cv.height = outH; const ctx = cv.getContext('2d');
   let mic = null;
   const dev = (await store.get('kv', 'dev')) || {};
@@ -31,11 +35,11 @@ export async function start(topic) {
   const vs = cv.captureStream(24);
   const tracks = [...vs.getVideoTracks(), ...(mic ? mic.getAudioTracks() : [])];
   const mime = pickMime();
-  const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime || undefined, videoBitsPerSecond: 5_000_000, audioBitsPerSecond: 128_000 });
+  const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime || undefined, videoBitsPerSecond: layout === 'premium' ? 8_000_000 : 5_000_000, audioBitsPerSecond: 128_000 });
   const id = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + Math.random().toString(36).slice(2, 5);
-  const meta = { id, topicObj: JSON.parse(JSON.stringify(topic)), topicId: topic.id, topic: topic.name, chapter: topic.chapterName || '', level: topic.levelName || '', started: Date.now(), dur: 0, size: 0, chunks: 0, mime: mr.mimeType || mime || 'video/webm', status: 'recording', w: outW, h: outH };
+  const meta = { id, topicObj: JSON.parse(JSON.stringify(topic)), topicId: topic.id, topic: topic.name, chapter: topic.chapterName || '', level: topic.levelName || '', started: Date.now(), dur: 0, size: 0, chunks: 0, mime: mr.mimeType || mime || 'video/webm', status: 'recording', w: outW, h: outH, layout, ...(layout === 'premium' ? { slot: PREMIUM.slot, ref: PREMIUM.ref } : {}) };
   await store.put('recs', id, meta);
-  rec = { mr, cv, ctx, mic, meta, paused: false, acc: 0, since: performance.now(), timer: 0, analyser: null, silentFor: 0 };
+  rec = { layout, mr, cv, ctx, mic, meta, paused: false, acc: 0, since: performance.now(), timer: 0, analyser: null, silentFor: 0 };
   let writing = Promise.resolve();
   mr.ondataavailable = e => {
     if (!e.data || !e.data.size) return; const n = meta.chunks++;
@@ -55,7 +59,7 @@ function elapsed() { return rec ? Math.round((rec.acc + (rec.paused ? 0 : perfor
 let lastUi = 0;
 function tick() {
   if (!rec) return;
-  if (!rec.paused) compose(rec.ctx, rec.cv.width, rec.cv.height);
+  if (!rec.paused) compose(rec.ctx, rec.cv.width, rec.cv.height, rec.layout);
   const now = performance.now();
   if (now - lastUi > 250) {
     lastUi = now; let lvl = 0;
@@ -84,12 +88,20 @@ let mCache = new Map(), mAt = 0;
 const R = el => { const now = performance.now(); if (now - mAt > 300) { mCache = new Map(); mAt = now; } let v = mCache.get(el); if (!v) { v = { r: el.getBoundingClientRect() }; mCache.set(el, v); } return v.r; };
 const getComputedStyleC = el => { R(el); const v = mCache.get(el); if (!v.s) { const s = getComputedStyle(el); v.s = { color: s.color, fontSize: s.fontSize, letterSpacing: s.letterSpacing, backgroundColor: s.backgroundColor }; } return v.s; };
 function rr(ctx, r, rad) { ctx.beginPath(); ctx.roundRect(r.left, r.top, r.width, r.height, rad); }
-export function compose(ctx, W, H) {
-  const k = W / innerWidth;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(opts.bgCanvas(), 0, 0, W, H);
-  ctx.setTransform(k, 0, 0, k, 0, 0);
-  const logo = $('header img'); if (logo && logo.complete) { const r = R(logo); ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 10; ctx.drawImage(logo, r.left, r.top, r.width, r.height); ctx.restore(); }
+// the branded window: frame, title bar, title, page number and the board / code / second window (drawn in screen units)
+function drawWindow(ctx) {
+  const win = R($('#win')), bar = R($('.bar'));
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 50; ctx.shadowOffsetY = 20; ctx.fillStyle = '#120d36'; rr(ctx, win, 16); ctx.fill(); ctx.restore();
+  ctx.save(); ctx.shadowColor = 'rgba(92,225,255,.25)'; ctx.shadowBlur = 40; ctx.strokeStyle = 'rgba(242,181,58,.45)'; ctx.lineWidth = 2; rr(ctx, { left: win.left - 1, top: win.top - 1, width: win.width + 2, height: win.height + 2 }, 17); ctx.stroke(); ctx.restore();
+  const g = ctx.createLinearGradient(0, bar.top, 0, bar.bottom); g.addColorStop(0, '#1a1446'); g.addColorStop(1, '#120d36'); ctx.fillStyle = g; rr(ctx, bar, [16, 16, 0, 0]); ctx.fill();
+  for (const i of document.querySelectorAll('.bar i')) { const r = R(i); ctx.fillStyle = getComputedStyleC(i).backgroundColor; ctx.beginPath(); ctx.arc(r.left + r.width / 2, r.top + r.height / 2, r.width / 2, 0, 7); ctx.fill(); }
+  ctx.textBaseline = 'middle';
+  const tt = $('#title'), tr = R(tt), tcs = getComputedStyleC(tt); ctx.fillStyle = '#F5F1EA'; ctx.font = `700 ${tcs.fontSize} "Space Grotesk", sans-serif`; ctx.textAlign = 'center';
+  ctx.fillText(tt.textContent, tr.left + tr.width / 2, tr.top + tr.height / 2, tr.width);
+  const pg = $('#pg'), pr = R(pg); ctx.fillStyle = '#b9b0d6'; ctx.font = '700 12px "JetBrains Mono", monospace'; ctx.textAlign = 'right'; ctx.fillText(pg.textContent, pr.right, pr.top + pr.height / 2);
+  opts.drawContent(ctx);
+}
+function drawChips(ctx) {
   ctx.textBaseline = 'middle';
   for (const s of document.querySelectorAll('#chips span')) {
     const r = R(s), cs = getComputedStyleC(s); ctx.strokeStyle = cs.color; ctx.lineWidth = 2; rr(ctx, r, r.height / 2); ctx.stroke();
@@ -97,16 +109,20 @@ export function compose(ctx, W, H) {
     ctx.textAlign = 'center'; ctx.fillText(s.textContent, r.left + r.width / 2 + 1, r.top + r.height / 2 + 1);
   }
   ctx.letterSpacing = '0px';
-  const win = R($('#win')), bar = R($('.bar')), board = R($('#board'));
-  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 50; ctx.shadowOffsetY = 20; ctx.fillStyle = '#120d36'; rr(ctx, win, 16); ctx.fill(); ctx.restore();
-  ctx.save(); ctx.shadowColor = 'rgba(92,225,255,.25)'; ctx.shadowBlur = 40; ctx.strokeStyle = 'rgba(242,181,58,.45)'; ctx.lineWidth = 2; rr(ctx, { left: win.left - 1, top: win.top - 1, width: win.width + 2, height: win.height + 2 }, 17); ctx.stroke(); ctx.restore();
-  const g = ctx.createLinearGradient(0, bar.top, 0, bar.bottom); g.addColorStop(0, '#1a1446'); g.addColorStop(1, '#120d36'); ctx.fillStyle = g; rr(ctx, bar, [16, 16, 0, 0]); ctx.fill();
-  for (const i of document.querySelectorAll('.bar i')) { const r = R(i); ctx.fillStyle = getComputedStyleC(i).backgroundColor; ctx.beginPath(); ctx.arc(r.left + r.width / 2, r.top + r.height / 2, r.width / 2, 0, 7); ctx.fill(); }
-  const tt = $('#title'), tr = R(tt), tcs = getComputedStyleC(tt); ctx.fillStyle = '#F5F1EA'; ctx.font = `700 ${tcs.fontSize} "Space Grotesk", sans-serif`; ctx.textAlign = 'center';
-  ctx.fillText(tt.textContent, tr.left + tr.width / 2, tr.top + tr.height / 2, tr.width);
-  const pg = $('#pg'), pr = R(pg); ctx.fillStyle = '#b9b0d6'; ctx.font = '700 12px "JetBrains Mono", monospace'; ctx.textAlign = 'right'; ctx.fillText(pg.textContent, pr.right, pr.top + pr.height / 2);
-  opts.drawContent(ctx);
-  const f = $('footer'), fr = R(f); ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = `700 ${getComputedStyleC(f).fontSize} "JetBrains Mono", monospace`; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), fr.right, fr.top + fr.height / 2); ctx.letterSpacing = '0px';
+}
+function drawFooter(ctx) {
+  const f = $('footer'), fr = R(f); ctx.textBaseline = 'middle'; ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = `700 ${getComputedStyleC(f).fontSize} "JetBrains Mono", monospace`; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), fr.right, fr.top + fr.height / 2); ctx.letterSpacing = '0px';
+}
+export function compose(ctx, W, H, layout = 'normal') {
+  if (layout === 'premium') return composePremium(ctx, W, H);
+  const k = W / innerWidth;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(opts.bgCanvas(), 0, 0, W, H);
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  const logo = $('header img'); if (logo && logo.complete) { const r = R(logo); ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 10; ctx.drawImage(logo, r.left, r.top, r.width, r.height); ctx.restore(); }
+  drawChips(ctx);
+  drawWindow(ctx);
+  drawFooter(ctx);
   if (cam.isOn()) {
     const v = cam.video$(), ce = $('#cam'), r = R(ce), circ = ce.classList.contains('circle'), rad = circ ? r.width / 2 : 18;
     ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.45)'; ctx.shadowBlur = 24; ctx.fillStyle = '#000'; rr(ctx, r, rad); ctx.fill(); ctx.restore();
@@ -120,4 +136,31 @@ export function compose(ctx, W, H) {
     }
     ctx.strokeStyle = '#F2B53A'; ctx.lineWidth = 3; rr(ctx, r, rad); ctx.stroke();
   }
+}
+
+// Premium layout, drawn on a 1920x1080 grid: the whole board window is scaled to fit on the left, and the right side
+// holds an empty portrait box (pure green) for the phone video. Key the green out in the editor so the frame stays on top.
+const WIN_AREA = { x: 40, y: 108, w: 1296, h: 902 };
+function composePremium(ctx, W, H) {
+  const k = W / PREMIUM.ref[0], S = PREMIUM.slot;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(opts.bgCanvas(), 0, 0, W, H);
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  const logo = $('header img'); if (logo && logo.complete && logo.naturalWidth) { const h = 64, w = h * logo.naturalWidth / logo.naturalHeight; ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 12; ctx.drawImage(logo, 40, 22, w, h); ctx.restore(); }
+  const chips = [...document.querySelectorAll('#chips span')];
+  if (chips.length) {
+    const rs = chips.map(R), right = Math.max(...rs.map(x => x.right)), top = Math.min(...rs.map(x => x.top)), cs = 1.3;
+    ctx.save(); ctx.translate(PREMIUM.ref[0] - 40 - right * cs, 38 - top * cs); ctx.scale(cs, cs); drawChips(ctx); ctx.restore();
+  }
+  const win = R($('#win')), s = Math.min(WIN_AREA.w / win.width, WIN_AREA.h / win.height);
+  ctx.save(); ctx.translate(WIN_AREA.x + (WIN_AREA.w - win.width * s) / 2, WIN_AREA.y + (WIN_AREA.h - win.height * s) / 2); ctx.scale(s, s); ctx.translate(-win.left, -win.top);
+  drawWindow(ctx); ctx.restore();
+  // camera box: dark frame with a gold edge, pure green inside, gold corner marks on top of the green
+  ctx.save(); ctx.shadowColor = 'rgba(92,225,255,.35)'; ctx.shadowBlur = 36; ctx.fillStyle = '#120d36'; ctx.beginPath(); ctx.roundRect(S.x - 10, S.y - 10, S.w + 20, S.h + 20, 28); ctx.fill(); ctx.restore();
+  ctx.strokeStyle = 'rgba(242,181,58,.6)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(S.x - 10, S.y - 10, S.w + 20, S.h + 20, 28); ctx.stroke();
+  ctx.fillStyle = '#00FF00'; ctx.beginPath(); ctx.roundRect(S.x, S.y, S.w, S.h, 18); ctx.fill();
+  ctx.strokeStyle = '#F2B53A'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; const m = 16, L = 46;
+  for (const [cx, cy, dx, dy] of [[S.x + m, S.y + m, 1, 1], [S.x + S.w - m, S.y + m, -1, 1], [S.x + m, S.y + S.h - m, 1, -1], [S.x + S.w - m, S.y + S.h - m, -1, -1]]) { ctx.beginPath(); ctx.moveTo(cx + dx * L, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy * L); ctx.stroke(); }
+  ctx.lineCap = 'butt';
+  const f = $('footer'); ctx.save(); ctx.textBaseline = 'middle'; ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = '700 16px "JetBrains Mono", monospace'; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), PREMIUM.ref[0] - 44, 1046); ctx.restore();
 }

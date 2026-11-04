@@ -259,7 +259,7 @@ function renderRecs(body, recs) {
   for (const r of recs) {
     const row = document.createElement('div'); row.className = 'recrow';
     const d = new Date(r.started);
-    row.innerHTML = `<div class="info"><strong>${esc(r.topic)}</strong><span>${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} · ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} · ${fmtDur(r.dur)} · ${fmtSize(r.size)}${r.status === 'recording' ? ' · recording now' : ''}${r.note ? ' · ' + esc(r.note) : ''}</span></div><div class="acts"></div>`;
+    row.innerHTML = `<div class="info"><strong>${esc(r.topic)}</strong><span>${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} · ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} · ${fmtDur(r.dur)} · ${fmtSize(r.size)}${r.status === 'recording' ? ' · recording now' : ''}${r.layout === 'premium' ? ' · premium (camera box)' : ''}${r.note ? ' · ' + esc(r.note) : ''}</span></div><div class="acts"></div>`;
     const acts = row.querySelector('.acts');
     const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.className = cls; b.textContent = txt; b.onclick = fn; acts.appendChild(b); return b; };
     if (r.status !== 'recording') {
@@ -267,6 +267,7 @@ function renderRecs(body, recs) {
       if (r.drive) mk('On Drive ✓', 'ghost', () => r.drive.startsWith('http') && window.open(r.drive, '_blank'));
       else mk('Send to Drive', 'ghost', async () => { await queueRec(r); renderLib(); });
       mk('Save to tablet', 'ghost', () => saveRec(r));
+      if (r.layout === 'premium') mk('Editor steps', 'ghost', () => premiumHelp(r));
       const del = mk('Delete', 'ghost danger', () => {
         acts.innerHTML = '<span>Delete this recording?</span>';
         mk('Yes, delete', 'ghost danger', async () => { await rec.remove(r.id); renderLib(); toast('Recording deleted'); });
@@ -276,6 +277,17 @@ function renderRecs(body, recs) {
     list.appendChild(row);
   }
   body.appendChild(list);
+}
+function premiumHelp(r) {
+  const s = r.slot || { x: 1376, y: 112, w: 504, h: 896 }, w = document.createElement('div'); w.className = 'modalWrap';
+  w.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h2>Premium lecture: steps for the editor</h2>
+    <ol class="help"><li>New CapCut project at <b>${r.w}×${r.h}</b> (16:9). Put this recording on the bottom track.</li>
+    <li>Put the phone video (portrait) on the track above. Set its position and size to fill the green box: box at <b>x ${Math.round(s.x * r.w / 1920)}, y ${Math.round(s.y * r.w / 1920)}</b>, size <b>${Math.round(s.w * r.w / 1920)}×${Math.round(s.h * r.w / 1920)}</b> pixels (9:16).</li>
+    <li>The recording has a 3-2-1 beep before it starts. Line the phone video up with the first beep, or with a clap if you made one.</li>
+    <li>To keep the gold corner marks on top of the phone video, copy the recording to a third track above, and use <b>Chroma key</b> on it to remove the green (#00FF00). Otherwise just cover the box with the phone video.</li>
+    <li>Use the audio of the phone video or of this recording, not both.</li></ol>
+    <div class="row"><button class="primary" id="phOk">Done</button></div></div>`;
+  document.body.appendChild(w); w.querySelector('#phOk').onclick = () => w.remove(); w.addEventListener('pointerdown', e => { if (e.target === w) w.remove(); });
 }
 function recName(r) { const d = new Date(r.started); const ext = r.mime.includes('mp4') ? 'mp4' : 'webm'; return `CSwithSR ${r.topic.replace(/[\\/:*?"<>|]/g, '')} ${d.toISOString().slice(0, 10)}.${ext}`; }
 async function saveRec(r) { const b = await rec.blobFor(r.id); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = recName(r); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); toast('Saving to your Downloads folder'); }
@@ -648,9 +660,44 @@ async function toggleRec() {
     return;
   }
   if (!topic) return;
-  try { await rec.start(topic); } catch (e) { toast('Recording could not start: ' + e.message); return; }
+  const o = await askRecLayout(); if (!o) return;
+  if (o.layout === 'premium') await countdown();
+  try { await rec.start(topic, o); } catch (e) { toast('Recording could not start: ' + e.message); return; }
   recBtn.innerHTML = svg('stop'); recBtn.classList.add('live'); recBtn.title = 'Stop recording'; recBtn.setAttribute('aria-label', 'Stop recording');
   pauseBtn.hidden = recTime.hidden = meter.hidden = false; toast('Recording started');
+}
+// Asked before every recording: should the final video include an empty camera box for the phone video?
+function askRecLayout() {
+  return new Promise(res => {
+    const w = document.createElement('div'); w.className = 'modalWrap';
+    const box = cfg.recBox === true, q = cfg.recQ === 1600 ? 1600 : 1920;
+    w.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="rlT">
+      <h2 id="rlT">Add a camera box to the final recording?</h2>
+      <p class="help">The box is only in the saved video. It never appears on your tablet while you teach, and the board keeps its full size.</p>
+      <div class="rlopts">
+        <button class="rlopt" id="rlNo"><b>No box</b><span>Record the board exactly as it looks on screen.</span></button>
+        <button class="rlopt" id="rlYes"><b>Yes, premium lecture</b><span>The board sits on the left and a green portrait box on the right. Your editor puts your phone video in it.</span></button>
+      </div>
+      <label for="rlQ" id="rlQw">Video size<select id="rlQ"><option value="1920">Full HD 1920×1080 (sharpest)</option><option value="1600">Lighter 1600×900 (smoother on the tablet)</option></select></label>
+      <div class="row"><button id="rlCancel" class="ghost">Cancel</button></div></div>`;
+    document.body.appendChild(w);
+    const sel = w.querySelector('#rlQ'); sel.value = String(q);
+    (box ? w.querySelector('#rlYes') : w.querySelector('#rlNo')).classList.add('last');
+    const done = v => { w.remove(); res(v); };
+    w.querySelector('#rlNo').onclick = () => { cfg.recBox = false; saveCfg(); done({ layout: 'normal' }); };
+    w.querySelector('#rlYes').onclick = () => { cfg.recBox = true; cfg.recQ = +sel.value; saveCfg(); done({ layout: 'premium', width: +sel.value }); };
+    w.querySelector('#rlCancel').onclick = () => done(null);
+    w.addEventListener('pointerdown', e => { if (e.target === w) done(null); });
+    w.querySelector('#rlYes').focus();
+  });
+}
+// 3-2-1 with beeps, so the editor can line the phone video up with the first beep
+async function countdown() {
+  const el = document.createElement('div'); el.className = 'cdown'; document.body.appendChild(el);
+  let ac = null; try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+  const beep = (f, d) => { if (!ac) return; const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f; g.gain.value = .25; o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + d); };
+  for (const n of [3, 2, 1]) { el.textContent = n; beep(660, .12); await new Promise(r => setTimeout(r, 1000)); }
+  el.remove(); if (ac) setTimeout(() => ac.close().catch(() => {}), 500);
 }
 function recStatus(s) {
   if (!s) return; recTime.textContent = (s.paused ? 'II ' : '') + fmtDur(s.t);
