@@ -279,13 +279,13 @@ function renderRecs(body, recs) {
   body.appendChild(list);
 }
 function premiumHelp(r) {
-  const s = r.slot || { x: 1376, y: 112, w: 504, h: 896 }, w = document.createElement('div'); w.className = 'modalWrap';
+  const c = r.capcut || { scale: 75, pos: [668, 0] }, w = document.createElement('div'); w.className = 'modalWrap';
   w.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h2>Premium lecture: steps for the editor</h2>
-    <ol class="help"><li>New CapCut project at <b>${r.w}×${r.h}</b> (16:9). Put this recording on the bottom track.</li>
-    <li>Put the phone video (portrait) on the track above. Set its position and size to fill the green box: box at <b>x ${Math.round(s.x * r.w / 1920)}, y ${Math.round(s.y * r.w / 1920)}</b>, size <b>${Math.round(s.w * r.w / 1920)}×${Math.round(s.h * r.w / 1920)}</b> pixels (9:16).</li>
-    <li>The recording has a 3-2-1 beep before it starts. Line the phone video up with the first beep, or with a clap if you made one.</li>
-    <li>To keep the gold corner marks on top of the phone video, copy the recording to a third track above, and use <b>Chroma key</b> on it to remove the green (#00FF00). Otherwise just cover the box with the phone video.</li>
-    <li>Use the audio of the phone video or of this recording, not both.</li></ol>
+    <ol class="help"><li>New CapCut project, ratio <b>16:9</b>, 1080p. Put this recording on the main track; it fills the screen.</li>
+    <li>Put the phone video (portrait) on the track above it. CapCut fits it to the full height.</li>
+    <li>Set the phone video to <b>Scale ${c.scale}%</b> and <b>Position X ${c.pos[0]}, Y ${c.pos[1]}</b>. It now covers the green box exactly, inside the frame.${c.scale === 75 ? '' : ' (Older recording: drag it over the green box.)'}</li>
+    <li>Line the two up with the 3-2-1 beeps at the start of this recording, or with a clap.</li>
+    <li>Keep the audio of one of them only. Mute the other.</li></ol>
     <div class="row"><button class="primary" id="phOk">Done</button></div></div>`;
   document.body.appendChild(w); w.querySelector('#phOk').onclick = () => w.remove(); w.addEventListener('pointerdown', e => { if (e.target === w) w.remove(); });
 }
@@ -822,7 +822,7 @@ document.addEventListener('keydown', e => {
     hint: v => { $('#hint').style.opacity = v ? 1 : 0; }, page: (c, n) => { $('#pg').textContent = c + ' / ' + n; } });
   bg.init($('#bg'), () => $('#lib').hidden ? $('#win').getBoundingClientRect() : null);
   await cam.init({ el: $('#cam'), toast });
-  await rec.init({ toast, status: recStatus, bgCanvas: bg.canvas, boardCanvas: board.canvas, drawContent: ctx => drawContent(ctx) });
+  await rec.init({ toast, status: recStatus, bgCanvas: bg.canvas, paintBg: bg.paintInto, boardCanvas: board.canvas, drawContent: ctx => drawContent(ctx) });
   ide.init({ toast });
   await drive.init({ blobSource: src => src.type === 'rec' ? rec.blobFor(src.id) : store.get('blobs', src.key) });
   drive.onChange(driveStatus); driveStatus();

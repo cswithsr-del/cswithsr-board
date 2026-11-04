@@ -17,7 +17,8 @@ function pickMime() {
   return c.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
 }
 // layout: 'normal' = what is on the screen; 'premium' = 16:9 frame with the board on the left and an empty green camera box on the right
-export const PREMIUM = { ref: [1920, 1080], slot: { x: 1376, y: 112, w: 504, h: 896 } };
+// slot = the phone video at exactly 75% in a 1080p CapCut project (a portrait clip fills the height at 100%), centred vertically
+export const PREMIUM = { ref: [1920, 1080], slot: { x: 1400, y: 135, w: 456, h: 810 }, scale: 75, pos: [668, 0] };
 export async function start(topic, o = {}) {
   if (rec) return;
   const layout = o.layout === 'premium' ? 'premium' : 'normal';
@@ -37,7 +38,7 @@ export async function start(topic, o = {}) {
   const mime = pickMime();
   const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime || undefined, videoBitsPerSecond: layout === 'premium' ? 8_000_000 : 5_000_000, audioBitsPerSecond: 128_000 });
   const id = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + Math.random().toString(36).slice(2, 5);
-  const meta = { id, topicObj: JSON.parse(JSON.stringify(topic)), topicId: topic.id, topic: topic.name, chapter: topic.chapterName || '', level: topic.levelName || '', started: Date.now(), dur: 0, size: 0, chunks: 0, mime: mr.mimeType || mime || 'video/webm', status: 'recording', w: outW, h: outH, layout, ...(layout === 'premium' ? { slot: PREMIUM.slot, ref: PREMIUM.ref } : {}) };
+  const meta = { id, topicObj: JSON.parse(JSON.stringify(topic)), topicId: topic.id, topic: topic.name, chapter: topic.chapterName || '', level: topic.levelName || '', started: Date.now(), dur: 0, size: 0, chunks: 0, mime: mr.mimeType || mime || 'video/webm', status: 'recording', w: outW, h: outH, layout, ...(layout === 'premium' ? { slot: PREMIUM.slot, ref: PREMIUM.ref, capcut: { scale: PREMIUM.scale, pos: PREMIUM.pos } } : {}) };
   await store.put('recs', id, meta);
   rec = { layout, mr, cv, ctx, mic, meta, paused: false, acc: 0, since: performance.now(), timer: 0, analyser: null, silentFor: 0 };
   let writing = Promise.resolve();
@@ -139,28 +140,38 @@ export function compose(ctx, W, H, layout = 'normal') {
 }
 
 // Premium layout, drawn on a 1920x1080 grid: the whole board window is scaled to fit on the left, and the right side
-// holds an empty portrait box (pure green) for the phone video. Key the green out in the editor so the frame stays on top.
-const WIN_AREA = { x: 40, y: 108, w: 1296, h: 902 };
+// holds a sharp-cornered portrait box (pure green) exactly the size of the phone video. The editor lays the phone
+// video on top at 75%; the frame and corner marks sit outside the box, so no keying is needed and no green can show.
+const WIN_AREA = { x: 64, y: 135, w: 1246, h: 810 }, U = 1.35;
+const box = (x, y, w, h) => ({ left: x, top: y, width: w, height: h, right: x + w, bottom: y + h });
 function composePremium(ctx, W, H) {
-  const k = W / PREMIUM.ref[0], S = PREMIUM.slot;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(opts.bgCanvas(), 0, 0, W, H);
+  const k = W / PREMIUM.ref[0], S = PREMIUM.slot, t = performance.now() / 1000;
+  const win = R($('#win')), s = Math.min(WIN_AREA.w / win.width, WIN_AREA.h / win.height);
+  const ww = win.width * s, wh = win.height * s, wx = WIN_AREA.x + (WIN_AREA.w - ww) / 2, wy = WIN_AREA.y + (WIN_AREA.h - wh) / 2;
+  const F = 12; // camera frame thickness
+  // background drawn natively for this layout, traces running into the board and the camera box
+  ctx.setTransform(k * U, 0, 0, k * U, 0, 0);
+  if (opts.paintBg) opts.paintBg(ctx, PREMIUM.ref[0] / U, PREMIUM.ref[1] / U, [box(wx / U, wy / U, ww / U, wh / U), box((S.x - F) / U, (S.y - F) / U, (S.w + 2 * F) / U, (S.h + 2 * F) / U)], t);
+  else { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(opts.bgCanvas(), 0, 0, W, H); }
   ctx.setTransform(k, 0, 0, k, 0, 0);
-  const logo = $('header img'); if (logo && logo.complete && logo.naturalWidth) { const h = 64, w = h * logo.naturalWidth / logo.naturalHeight; ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 12; ctx.drawImage(logo, 40, 22, w, h); ctx.restore(); }
+  const logo = $('header img'); if (logo && logo.complete && logo.naturalWidth) { const h = 74, w = h * logo.naturalWidth / logo.naturalHeight; ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 12; ctx.drawImage(logo, wx, 30, w, h); ctx.restore(); }
   const chips = [...document.querySelectorAll('#chips span')];
   if (chips.length) {
-    const rs = chips.map(R), right = Math.max(...rs.map(x => x.right)), top = Math.min(...rs.map(x => x.top)), cs = 1.3;
-    ctx.save(); ctx.translate(PREMIUM.ref[0] - 40 - right * cs, 38 - top * cs); ctx.scale(cs, cs); drawChips(ctx); ctx.restore();
+    const rs = chips.map(R), right = Math.max(...rs.map(x => x.right)), top = Math.min(...rs.map(x => x.top)), bot = Math.max(...rs.map(x => x.bottom)), cs = 1.35;
+    ctx.save(); ctx.translate(S.x + S.w + F - right * cs, 67 - (top + bot) / 2 * cs); ctx.scale(cs, cs); drawChips(ctx); ctx.restore();
   }
-  const win = R($('#win')), s = Math.min(WIN_AREA.w / win.width, WIN_AREA.h / win.height);
-  ctx.save(); ctx.translate(WIN_AREA.x + (WIN_AREA.w - win.width * s) / 2, WIN_AREA.y + (WIN_AREA.h - win.height * s) / 2); ctx.scale(s, s); ctx.translate(-win.left, -win.top);
-  drawWindow(ctx); ctx.restore();
-  // camera box: dark frame with a gold edge, pure green inside, gold corner marks on top of the green
-  ctx.save(); ctx.shadowColor = 'rgba(92,225,255,.35)'; ctx.shadowBlur = 36; ctx.fillStyle = '#120d36'; ctx.beginPath(); ctx.roundRect(S.x - 10, S.y - 10, S.w + 20, S.h + 20, 28); ctx.fill(); ctx.restore();
-  ctx.strokeStyle = 'rgba(242,181,58,.6)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(S.x - 10, S.y - 10, S.w + 20, S.h + 20, 28); ctx.stroke();
-  ctx.fillStyle = '#00FF00'; ctx.beginPath(); ctx.roundRect(S.x, S.y, S.w, S.h, 18); ctx.fill();
-  ctx.strokeStyle = '#F2B53A'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; const m = 16, L = 46;
-  for (const [cx, cy, dx, dy] of [[S.x + m, S.y + m, 1, 1], [S.x + S.w - m, S.y + m, -1, 1], [S.x + m, S.y + S.h - m, 1, -1], [S.x + S.w - m, S.y + S.h - m, -1, -1]]) { ctx.beginPath(); ctx.moveTo(cx + dx * L, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy * L); ctx.stroke(); }
+  ctx.save(); ctx.translate(wx, wy); ctx.scale(s, s); ctx.translate(-win.left, -win.top); drawWindow(ctx); ctx.restore();
+  // camera frame: glow, dark ring, gold edge, a light running round it, corner marks on the ring
+  const fx = S.x - F, fy = S.y - F, fw = S.w + 2 * F, fh = S.h + 2 * F;
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 50; ctx.shadowOffsetY = 20; ctx.fillStyle = '#120d36'; ctx.beginPath(); ctx.roundRect(fx, fy, fw, fh, 18); ctx.fill(); ctx.restore();
+  ctx.save(); ctx.shadowColor = 'rgba(92,225,255,.3)'; ctx.shadowBlur = 40; ctx.strokeStyle = 'rgba(242,181,58,.55)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(fx - 1, fy - 1, fw + 2, fh + 2, 19); ctx.stroke(); ctx.restore();
+  const per = 2 * (fw + fh), run = (t / 6 % 1) * per;
+  ctx.save(); ctx.beginPath(); ctx.roundRect(fx - 1, fy - 1, fw + 2, fh + 2, 19); ctx.setLineDash([140, per - 140]); ctx.lineDashOffset = -run; ctx.strokeStyle = '#5CE1FF'; ctx.lineWidth = 3; ctx.shadowColor = '#5CE1FF'; ctx.shadowBlur = 14; ctx.stroke();
+  ctx.lineDashOffset = -run - per / 2; ctx.strokeStyle = '#F2B53A'; ctx.shadowColor = '#F2B53A'; ctx.stroke(); ctx.restore();
+  ctx.fillStyle = '#0a0720'; ctx.fillRect(S.x, S.y, S.w, S.h);
+  ctx.fillStyle = '#00FF00'; ctx.fillRect(S.x + 2, S.y + 2, S.w - 4, S.h - 4); // inset 2px: the phone video always covers it fully
+  ctx.strokeStyle = '#F2B53A'; ctx.lineWidth = 4; ctx.lineCap = 'square'; const m = F / 2, L = 40;
+  for (const [cx, cy, dx, dy] of [[S.x - m, S.y - m, 1, 1], [S.x + S.w + m, S.y - m, -1, 1], [S.x - m, S.y + S.h + m, 1, -1], [S.x + S.w + m, S.y + S.h + m, -1, -1]]) { ctx.beginPath(); ctx.moveTo(cx + dx * L, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy * L); ctx.stroke(); }
   ctx.lineCap = 'butt';
-  const f = $('footer'); ctx.save(); ctx.textBaseline = 'middle'; ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = '700 16px "JetBrains Mono", monospace'; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), PREMIUM.ref[0] - 44, 1046); ctx.restore();
+  const f = $('footer'); ctx.save(); ctx.textBaseline = 'middle'; ctx.fillStyle = 'rgba(245,241,234,.55)'; ctx.font = '700 18px "JetBrains Mono", monospace'; ctx.letterSpacing = '2px'; ctx.textAlign = 'right'; ctx.fillText(f.textContent.trim(), S.x + S.w + F, 1013); ctx.restore();
 }
