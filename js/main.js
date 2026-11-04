@@ -279,11 +279,11 @@ function renderRecs(body, recs) {
   body.appendChild(list);
 }
 function premiumHelp(r) {
-  const c = r.capcut || { scale: 75, pos: [668, 0] }, w = document.createElement('div'); w.className = 'modalWrap';
+  const c = r.capcut || { scale: 70, pos: [684, 0] }, w = document.createElement('div'); w.className = 'modalWrap';
   w.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h2>Premium lecture: steps for the editor</h2>
     <ol class="help"><li>New CapCut project, ratio <b>16:9</b>, 1080p. Put this recording on the main track; it fills the screen.</li>
     <li>Put the phone video (portrait) on the track above it. CapCut fits it to the full height.</li>
-    <li>Set the phone video to <b>Scale ${c.scale}%</b> and <b>Position X ${c.pos[0]}, Y ${c.pos[1]}</b>. It now covers the green box exactly, inside the frame.${c.scale === 75 ? '' : ' (Older recording: drag it over the green box.)'}</li>
+    <li>Set the phone video to <b>Scale ${c.scale}%</b> and <b>Position X ${c.pos[0]}, Y ${c.pos[1]}</b>. It now covers the green box exactly, inside the frame.</li>
     <li>Line the two up with the 3-2-1 beeps at the start of this recording, or with a clap.</li>
     <li>Keep the audio of one of them only. Mute the other.</li></ol>
     <div class="row"><button class="primary" id="phOk">Done</button></div></div>`;

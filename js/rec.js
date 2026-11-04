@@ -17,8 +17,8 @@ function pickMime() {
   return c.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
 }
 // layout: 'normal' = what is on the screen; 'premium' = 16:9 frame with the board on the left and an empty green camera box on the right
-// slot = the phone video at exactly 75% in a 1080p CapCut project (a portrait clip fills the height at 100%), centred vertically
-export const PREMIUM = { ref: [1920, 1080], slot: { x: 1400, y: 135, w: 456, h: 810 }, scale: 75, pos: [668, 0] };
+// slot = the phone video at exactly 70% in a 1080p CapCut project (a portrait clip fills the height at 100%), centred vertically
+export const PREMIUM = { ref: [1920, 1080], slot: { x: 1431, y: 162, w: 426, h: 756 }, scale: 70, pos: [684, 0] };
 export async function start(topic, o = {}) {
   if (rec) return;
   const layout = o.layout === 'premium' ? 'premium' : 'normal';
@@ -141,8 +141,8 @@ export function compose(ctx, W, H, layout = 'normal') {
 
 // Premium layout, drawn on a 1920x1080 grid: the whole board window is scaled to fit on the left, and the right side
 // holds a sharp-cornered portrait box (pure green) exactly the size of the phone video. The editor lays the phone
-// video on top at 75%; the frame and corner marks sit outside the box, so no keying is needed and no green can show.
-const WIN_AREA = { x: 64, y: 135, w: 1246, h: 810 }, U = 1.35;
+// video on top at 70%; the frame and corner marks sit outside the box, so no keying is needed and no green can show.
+const WIN_AREA = { x: 64, y: 118, w: 1287, h: 844 }, U = 1.35;
 const box = (x, y, w, h) => ({ left: x, top: y, width: w, height: h, right: x + w, bottom: y + h });
 function composePremium(ctx, W, H) {
   const k = W / PREMIUM.ref[0], S = PREMIUM.slot, t = performance.now() / 1000;
@@ -154,11 +154,11 @@ function composePremium(ctx, W, H) {
   if (opts.paintBg) opts.paintBg(ctx, PREMIUM.ref[0] / U, PREMIUM.ref[1] / U, [box(wx / U, wy / U, ww / U, wh / U), box((S.x - F) / U, (S.y - F) / U, (S.w + 2 * F) / U, (S.h + 2 * F) / U)], t);
   else { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(opts.bgCanvas(), 0, 0, W, H); }
   ctx.setTransform(k, 0, 0, k, 0, 0);
-  const logo = $('header img'); if (logo && logo.complete && logo.naturalWidth) { const h = 74, w = h * logo.naturalWidth / logo.naturalHeight; ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 12; ctx.drawImage(logo, wx, 30, w, h); ctx.restore(); }
+  const logo = $('header img'); if (logo && logo.complete && logo.naturalWidth) { const h = 72, w = h * logo.naturalWidth / logo.naturalHeight; ctx.save(); ctx.shadowColor = 'rgba(242,181,58,.25)'; ctx.shadowBlur = 12; ctx.drawImage(logo, wx, 24, w, h); ctx.restore(); }
   const chips = [...document.querySelectorAll('#chips span')];
   if (chips.length) {
     const rs = chips.map(R), right = Math.max(...rs.map(x => x.right)), top = Math.min(...rs.map(x => x.top)), bot = Math.max(...rs.map(x => x.bottom)), cs = 1.35;
-    ctx.save(); ctx.translate(S.x + S.w + F - right * cs, 67 - (top + bot) / 2 * cs); ctx.scale(cs, cs); drawChips(ctx); ctx.restore();
+    ctx.save(); ctx.translate(S.x + S.w + F - right * cs, 60 - (top + bot) / 2 * cs); ctx.scale(cs, cs); drawChips(ctx); ctx.restore();
   }
   ctx.save(); ctx.translate(wx, wy); ctx.scale(s, s); ctx.translate(-win.left, -win.top); drawWindow(ctx); ctx.restore();
   // camera frame: glow, dark ring, gold edge, a light running round it, corner marks on the ring
