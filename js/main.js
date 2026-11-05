@@ -27,29 +27,41 @@ let NAMES = { ch: {}, tp: {}, hide: [], trash: [], gone: [], order: { ch: {}, tp
 async function loadNames() {
   NAMES = Object.assign({ ch: {}, tp: {}, hide: [], trash: [], gone: [], order: { ch: {}, tp: {} } }, (await store.get('kv', 'names')) || {});
   NAMES.order = Object.assign({ ch: {}, tp: {} }, NAMES.order || {});
+  if (!NAMES.split) await splitBatches();
   if (NAMES.hide.length) { for (const key of NAMES.hide) NAMES.trash.push({ kind: 'topic', key, name: NAMES.tp[key] || key.replace(/^\w+:/, '').replace(/-/g, ' '), at: Date.now() }); NAMES.hide = []; await saveNames(); }
 }
+// Online and GreenHall used to share chapter/subtopic names, order, Trash and added subtopics. Give GreenHall its own copy once.
+async function splitBatches() {
+  const g = k => k.replace(/^ol:/, 'olg:').replace(/^ch:ol:/, 'ch:olg:');
+  for (const o of [NAMES.ch, NAMES.tp, NAMES.order.ch]) for (const k of Object.keys(o)) if (k.startsWith('ol:')) o[g(k)] = o[k];
+  for (const k of Object.keys(NAMES.order.tp)) if (k.startsWith('ol:')) NAMES.order.tp[g(k)] = NAMES.order.tp[k].map(g);
+  const on = LEVELS.find(l => l.id === 'ol').name, gn = LEVELS.find(l => l.id === 'olg').name;
+  for (const t of NAMES.trash.slice()) if (t.base === 'ol' || (!t.base && /^(ch:)?ol:/.test(t.key))) { t.level = on; NAMES.trash.push({ ...t, base: 'olg', key: g(t.key), level: gn }); }
+  NAMES.gone.push(...NAMES.gone.filter(k => /^(ch:)?ol:/.test(k)).map(g));
+  const c = await customTopics(); c.push(...c.filter(x => x.lv === 'ol').map(x => ({ ...x, lv: 'olg' }))); await store.put('kv', 'custom', c);
+  NAMES.split = 1; await saveNames();
+}
 const isOut = key => NAMES.trash.some(t => t.key === key) || NAMES.gone.includes(key);
-const chKey = (lv, n) => 'ch:' + baseOf(lv) + ':' + n;
+const chKey = (lv, n) => 'ch:' + lv + ':' + n;
 function sortedChapters(lv, p) {
-  const ord = NAMES.order.ch[baseOf(lv) + ':' + p.id] || [];
+  const ord = NAMES.order.ch[lv + ':' + p.id] || [];
   return p.chapters.filter(ch => !isOut(chKey(lv, ch.n))).map((ch, i) => [ch, ord.includes(ch.n) ? ord.indexOf(ch.n) : 1000 + i]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
 }
 function sortedNames(lv, ch, names) {
-  const ord = NAMES.order.tp[baseOf(lv) + ':' + ch.n] || [];
+  const ord = NAMES.order.tp[lv + ':' + ch.n] || [];
   return names.map((n, i) => [n, ord.includes(nk(lv, n)) ? ord.indexOf(nk(lv, n)) : 1000 + i]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
 }
 const saveNames = () => store.put('kv', 'names', NAMES);
-const chName = (lv, ch) => NAMES.ch[baseOf(lv) + ':' + ch.n] || ch.name;
-const nk = (lv, name) => topicId(baseOf(lv), name);   // key for names, hiding and code (shared by both O Level batches)
+const chName = (lv, ch) => NAMES.ch[lv + ':' + ch.n] || ch.name;
+const nk = (lv, name) => topicId(lv, name);   // key for names, hiding, order and code (each O Level batch has its own)
 // code is kept apart for each O Level batch: Online uses the shared key, GreenHall its own
-const codeKey = (lv, name) => lv === 'olg' ? topicId('olg', name) : nk(lv, name);
+const codeKey = nk;
 const tpName = (id, name) => NAMES.tp[id] || name;
 let libEdit = false;
 async function allTopics() {
   const out = []; const custom = await customTopics();
   for (const lv of LEVELS) for (const p of lv.papers) for (const ch of sortedChapters(lv.id, p)) {
-    const names = [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)];
+    const names = [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === lv.id && inChapter(ch, c.ch)).map(c => c.name)];
     for (const name of names) { const id = topicId(lv.id, name), key = nk(lv.id, name); if (isOut(key)) continue; out.push({ id, orig: name, codeScope: 't:' + codeKey(lv.id, name), name: tpName(key, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
   }
   return out;
@@ -195,24 +207,24 @@ async function renderLib() {
     for (const ch of sortedChapters(lv.id, p)) {
       // old subtopics of merged chapters only show if they already have notes or recordings
       const legacy = (ch.legacy || []).filter(n => { const id = topicId(lv.id, n); return metas[id] || recCount[id]; });
-      const names = sortedNames(lv.id, ch, [...ch.topics, ...legacy, ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)]);
+      const names = sortedNames(lv.id, ch, [...ch.topics, ...legacy, ...custom.filter(c => c.lv === lv.id && inChapter(ch, c.ch)).map(c => c.name)]);
       const cName = chName(lv.id, ch);
       const visible = names.filter(n => !isOut(nk(lv.id, n)));
       const match = visible.filter(n => !q || tpName(nk(lv.id, n), n).toLowerCase().includes(q) || cName.toLowerCase().includes(q));
       if (q && !match.length) continue;
       const card = document.createElement('div'); card.className = 'ch'; card.dataset.key = ch.n;
       card.innerHTML = `<h3>${libEdit ? '<span class="dh" aria-label="Drag to move this chapter">⠿</span>' : ''}<b>${chLabel(ch)}</b><span class="cn">${esc(cName)}</span></h3>`;
-      const renCh = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = baseOf(lv.id) + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
-      const delCh = async () => { NAMES.trash.push({ kind: 'chapter', key: chKey(lv.id, ch.n), base: baseOf(lv.id), n: ch.n, paper: p.id, name: `${chLabel(ch)} ${cName}`, level: lv.name, at: Date.now() }); await saveNames(); toast('Chapter moved to Trash. Restore it from Trash with everything in it.'); renderLib(); };
-      const saveChOrder = async keys => { NAMES.order.ch[baseOf(lv.id) + ':' + p.id] = keys.map(Number); await saveNames(); };
+      const renCh = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = lv.id + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
+      const delCh = async () => { NAMES.trash.push({ kind: 'chapter', key: chKey(lv.id, ch.n), base: lv.id, n: ch.n, paper: p.id, name: `${chLabel(ch)} ${cName}`, level: lv.name, at: Date.now() }); await saveNames(); toast('Chapter moved to Trash. Restore it from Trash with everything in it.'); renderLib(); };
+      const saveChOrder = async keys => { NAMES.order.ch[lv.id + ':' + p.id] = keys.map(Number); await saveNames(); };
       if (!libEdit && !q) holdable(card.querySelector('h3'), card, grid, '.ch', true, saveChOrder, [['Rename chapter', renCh], ['Move to Trash', delCh, true]]);
       if (libEdit) {
         const pen = document.createElement('button'); pen.className = 'mini'; pen.textContent = 'Rename'; card.querySelector('h3').appendChild(pen);
-        pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = baseOf(lv.id) + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
+        pen.onclick = () => inlineEdit(card.querySelector('h3 .cn'), cName, async v => { const k = lv.id + ':' + ch.n; if (v && v !== ch.name) NAMES.ch[k] = v; else delete NAMES.ch[k]; await saveNames(); renderLib(); });
         const del = document.createElement('button'); del.className = 'mini danger'; del.textContent = 'Delete'; card.querySelector('h3').appendChild(del);
         del.onclick = async () => { if (!del.dataset.sure) { del.dataset.sure = 1; del.textContent = 'Move to Trash?'; return; }
-          NAMES.trash.push({ kind: 'chapter', key: chKey(lv.id, ch.n), base: baseOf(lv.id), n: ch.n, paper: p.id, name: `${chLabel(ch)} ${cName}`, level: lv.name, at: Date.now() }); await saveNames(); toast('Chapter moved to Trash. Restore it from Trash with everything in it.'); renderLib(); };
-        dragSort(card.querySelector('.dh'), card, grid, '.ch', true, async keys => { NAMES.order.ch[baseOf(lv.id) + ':' + p.id] = keys.map(Number); await saveNames(); });
+          NAMES.trash.push({ kind: 'chapter', key: chKey(lv.id, ch.n), base: lv.id, n: ch.n, paper: p.id, name: `${chLabel(ch)} ${cName}`, level: lv.name, at: Date.now() }); await saveNames(); toast('Chapter moved to Trash. Restore it from Trash with everything in it.'); renderLib(); };
+        dragSort(card.querySelector('.dh'), card, grid, '.ch', true, async keys => { NAMES.order.ch[lv.id + ':' + p.id] = keys.map(Number); await saveNames(); });
       }
       for (const orig of match) {
         const id = topicId(lv.id, orig), key = nk(lv.id, orig), name = tpName(key, orig), m = metas[id], rc = recCount[id] || 0; shown++;
@@ -224,16 +236,16 @@ async function renderLib() {
           rn.onclick = () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[key] = v; else delete NAMES.tp[key]; await saveNames(); renderLib(); });
           const hd = document.createElement('button'); hd.className = 'mini danger'; hd.textContent = 'Delete';
           hd.onclick = async () => { if (!hd.dataset.sure) { hd.dataset.sure = 1; hd.textContent = 'Move to Trash?'; return; }
-            NAMES.trash.push({ kind: 'topic', key, base: baseOf(lv.id), ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); };
+            NAMES.trash.push({ kind: 'topic', key, base: lv.id, ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); };
           b.append(rn, hd);
         } else {
           b.onclick = () => { if (b._held) { b._held = false; return; } openTopic({ id, orig, codeScope: 't:' + codeKey(lv.id, orig), name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id }); };
-          if (!q) holdable(b, b, card, '.tp', false, async keys => { NAMES.order.tp[baseOf(lv.id) + ':' + ch.n] = keys; await saveNames(); }, [
+          if (!q) holdable(b, b, card, '.tp', false, async keys => { NAMES.order.tp[lv.id + ':' + ch.n] = keys; await saveNames(); }, [
             ['Rename subtopic', () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[key] = v; else delete NAMES.tp[key]; await saveNames(); renderLib(); })],
-            ['Move to Trash', async () => { NAMES.trash.push({ kind: 'topic', key, base: baseOf(lv.id), ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); }, true]]);
+            ['Move to Trash', async () => { NAMES.trash.push({ kind: 'topic', key, base: lv.id, ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); }, true]]);
         }
         card.appendChild(b);
-        if (libEdit) dragSort(b.querySelector('.dh'), b, card, '.tp', false, async keys => { NAMES.order.tp[baseOf(lv.id) + ':' + ch.n] = keys; await saveNames(); });
+        if (libEdit) dragSort(b.querySelector('.dh'), b, card, '.tp', false, async keys => { NAMES.order.tp[lv.id + ':' + ch.n] = keys; await saveNames(); });
       }
       if (!q) {
         const add = document.createElement('button'); add.className = 'addt'; add.textContent = '+ Add a topic';
@@ -241,7 +253,7 @@ async function renderLib() {
           const row = document.createElement('div'); row.className = 'addrow';
           row.innerHTML = `<input placeholder="${ch.merged ? 'e.g. Lecture 1: Data types' : 'e.g. ' + ch.n + '.' + (ch.topics.length + 1) + ' Revision'}" aria-label="New topic name"><button class="primary">Add</button>`;
           add.replaceWith(row); const inp = row.querySelector('input'); inp.focus();
-          const go = async () => { const v = inp.value.trim(); if (!v) return renderLib(); const c = await customTopics(); c.push({ lv: baseOf(lv.id), ch: ch.n, name: v }); await store.put('kv', 'custom', c); renderLib(); };
+          const go = async () => { const v = inp.value.trim(); if (!v) return renderLib(); const c = await customTopics(); c.push({ lv: lv.id, ch: ch.n, name: v }); await store.put('kv', 'custom', c); renderLib(); };
           row.querySelector('button').onclick = go; inp.onkeydown = e => { if (e.key === 'Enter') go(); };
         };
         card.appendChild(add);
@@ -372,14 +384,14 @@ function renderTrash(body) {
   }
   body.appendChild(wrap);
 }
-// erase the notes, sheets, PDFs, pictures' pages and code of a subtopic (in both O Level batches), or of a whole chapter
+// erase the notes, sheets, PDFs, pictures' pages and code of a subtopic (of that batch only), or of a whole chapter
 async function purgeNotes(id) {
   for (const s of (await store.get('kv', 'sheets:' + id)) || []) await purgeNotes(s.id);
   await store.del('topics', id); await store.del('kv', 'm:' + id); await store.delPrefix('blobs', 'pdf:' + id + ':'); await store.del('kv', 'sheets:' + id); await store.del('kv', 'sheetLast:' + id);
 }
 async function purgeTopic(base, orig, key) {
-  for (const v of base === 'ol' ? ['ol', 'olg'] : [base]) await purgeNotes(topicId(v, orig));
-  for (const ck of base === 'ol' ? [key, topicId('olg', orig)] : [key]) {
+  await purgeNotes(topicId(base, orig));
+  for (const ck of [key]) {
     for (const p of ['cp:t:', 'cf:t:']) await store.delPrefix('kv', p + ck + ':');
     for (const k of ['ideInit:t:', 'ideLast:t:']) await store.del('kv', k + ck);
     for (const [id] of await store.getPrefix('topics', 'code:t:' + ck + ':')) await purgeNotes(id);

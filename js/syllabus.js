@@ -56,7 +56,7 @@ export const chLabel = ch => ch.label || String(ch.n).padStart(2, '0');
 export const inChapter = (ch, n) => n === ch.n || (ch.merged || []).includes(n);
 
 // O Level is taught to two batches: online at CSwithSR and in person at GreenHall.
-// Both share the syllabus, names and Code Lab; notes, recordings and Drive folders are kept apart.
+// They share only the syllabus; names, order, Trash, added subtopics, notes, code, recordings and Drive folders are kept apart.
 LEVELS[0].name = 'O Level · Online';
 LEVELS.splice(1, 0, { ...LEVELS[0], id: 'olg', name: 'O Level · GreenHall', base: 'ol' });
 export const baseOf = lv => (LEVELS.find(l => l.id === lv) || {}).base || lv;
