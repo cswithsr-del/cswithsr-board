@@ -85,6 +85,12 @@ print("Report.txt written")
 };
 async function ensureSamples() {
   if (await store.get('kv', 'ideInit:' + LV)) return;
+  // GreenHall code used to be shared with Online: the first time it opens on its own, it starts with a copy of it
+  const from = LV === 'olg' ? 'ol' : LV.startsWith('t:olg:') ? 't:ol:' + LV.slice(6) : null;
+  if (from && await store.get('kv', 'ideInit:' + from)) {
+    for (const p of ['cp:', 'cf:']) for (const [k, v] of await store.getPrefix('kv', p + from + ':')) await store.put('kv', p + LV + ':' + k.slice((p + from + ':').length), v);
+    await store.put('kv', 'ideInit:' + LV, 1); return;
+  }
   if (LV.startsWith('t:')) { await store.put('kv', 'ideInit:' + LV, 1); return; }   // a subtopic starts empty
   if (LV === 'ol') { // programs made before levels existed move into O Level
     for (const [k, v] of await store.getPrefix('kv', 'prog:')) { await store.put('kv', progKey(k.slice(5)), v); await store.del('kv', k); }

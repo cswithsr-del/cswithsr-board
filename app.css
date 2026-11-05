@@ -323,3 +323,7 @@ body.libopen #app,body.libopen #cam,body.libopen #show{visibility:hidden}
 .rlopt b{font-size:16px}.rlopt span{font-size:13px;opacity:.75}
 .rlopt.last{border-color:#F2B53A;background:rgba(242,181,58,.12)}
 .cdown{position:fixed;inset:0;display:grid;place-items:center;z-index:99999;background:rgba(10,17,45,.55);color:#F2B53A;font:800 160px "Space Grotesk",sans-serif;pointer-events:none}
+
+/* today's strip on a page that also has older writing */
+.thumb .band{position:absolute;left:0;right:0;border-top:2px dashed #7CF29A;border-bottom:2px dashed #7CF29A;pointer-events:none;display:none}
+.thumb.part .band{display:block;box-shadow:0 0 0 999px rgba(7,3,33,.62)}

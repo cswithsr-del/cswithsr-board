@@ -103,7 +103,7 @@ function save() {
   saveT = setTimeout(() => { saveT = 0; if (!topic || topic.id !== id || loading) return; saveNow().catch(e => opts.toast('Could not save notes: ' + e.message)); }, 900);
 }
 export async function flush() { if (saveT) { clearTimeout(saveT); saveT = 0; if (!loading) await saveNow(); } }
-const pageJSON = () => pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0, gid: st.gid })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h, ...(o.c ? { c: o.c } : {}) })) }));
+const pageJSON = () => pages.map(p => ({ id: p.id, k: p.k, bg: p.bg, pat: p.pat, h: p.h, d: p.d, n: p.n, s: p.s.map(st => ({ t: st.t, c: st.c, w: st.w, p: st.p, sh: st.sh || 0, gid: st.gid, ...(st.dt ? { dt: st.dt } : {}) })), im: (p.im || []).map(o => ({ id: o.id, key: o.key, x: o.x, y: o.y, w: o.w, h: o.h, ...(o.c ? { c: o.c } : {}), ...(o.dt ? { dt: o.dt } : {}) })) }));
 async function saveNow() {
   if (!topic || loading) return;
   const id = topic.id, strokes = pages.reduce((a, p) => a + p.s.length, 0);
@@ -416,8 +416,8 @@ export function selDelete() { if (!sel) return; const S = sel; snapUndo(S.page, 
 export function selDuplicate() {
   if (!sel) return; const page = sel.page; let copies, ic;
   snapUndo(page, () => {
-    copies = sel.items.map(st => { const n = { t: st.t, c: st.c, w: st.w, sh: st.sh, p: st.p.map((v, i) => i % 3 === 2 ? v : +(v + 24).toFixed(2)) }; build(n); return n; });
-    ic = (sel.imgs || []).map(o => ({ ...o, id: pid(), x: o.x + 24, y: o.y + 24 }));
+    copies = sel.items.map(st => { const n = { t: st.t, c: st.c, w: st.w, sh: st.sh, dt: dayStr(), p: st.p.map((v, i) => i % 3 === 2 ? v : +(v + 24).toFixed(2)) }; build(n); return n; });
+    ic = (sel.imgs || []).map(o => ({ ...o, id: pid(), dt: dayStr(), x: o.x + 24, y: o.y + 24 }));
     page.s.push(...copies); page.im = [...(page.im || []), ...ic];
   });
   sel = { page, items: copies, imgs: ic }; selBB(); setSel(sel);
@@ -553,9 +553,9 @@ function up(e) {
     const L = live; clearTimeout(L.hold);
     if (L.mode === 'draw' && L.st.p.length) {
       if (tool.auto && L.st.t === 'pen') recognise(L.st);
-      touched.add(L.page.id); L.page.s.push(L.st); undo.push({ t: 'add', page: L.page, st: L.st }); redo = []; save();
+      L.st.dt = dayStr(); touched.add(L.page.id); L.page.s.push(L.st); undo.push({ t: 'add', page: L.page, st: L.st }); redo = []; save();
     }
-    if (L.mode === 'shape' && L.sts.length && Math.hypot(L.x1 - L.x0, L.y1 - L.y0) > 4) { const gid = pid(); L.sts.forEach(s => { s.gid = gid; }); touched.add(L.page.id); L.page.s.push(...L.sts); undo.push({ t: 'addmany', page: L.page, sts: L.sts }); redo = []; save(); }
+    if (L.mode === 'shape' && L.sts.length && Math.hypot(L.x1 - L.x0, L.y1 - L.y0) > 4) { const gid = pid(), dt = dayStr(); L.sts.forEach(s => { s.gid = gid; s.dt = dt; }); touched.add(L.page.id); L.page.s.push(...L.sts); undo.push({ t: 'addmany', page: L.page, sts: L.sts }); redo = []; save(); }
     if (L.mode === 'erase') finishErase(L);
     if (L.mode === 'lasso') finishLasso(L.path, L.page);
     if (L.mode === 'xform') { undo.push({ t: 'xform', items: L.orig.map(o => ({ st: o.st, before: [o.p, o.w], after: [o.st.p, o.st.w] })), imgs: (L.oimg || []).map(q => ({ o: q.o, before: q.r, after: [q.o.x, q.o.y, q.o.w, q.o.h] })) }); redo = []; touched.add(sel.page.id); save(); reportSel(); }
@@ -691,15 +691,30 @@ export function goPage(i) { if (!pages[i]) return; view.sy = tops[i] - GAP; clam
 /* ---- export helpers ---- */
 export const topicNow = () => topic;
 export function pageInfo() { return pages.map((p, i) => ({ i, kind: p.k, strokes: p.s.length, touched: touched.has(p.id) })); }
-export async function renderPage(i, W) {
-  const p = pages[i]; const c = document.createElement('canvas'); c.width = Math.round(W); c.height = Math.round(W * p.h / DOCW);
-  const x = c.getContext('2d'); const k = W / DOCW;
+// The part of a page written on today: { y0, y1 } in page units, or null when nothing on it carries today's date
+// (pages written before dates were kept). Takes the full width, from just above the first new line to just below the last.
+export function todayBand(i, day = dayStr()) {
+  const p = pages[i]; if (!p) return null; let a = 1e9, z = -1e9;
+  for (const st of p.s) if (st.dt === day) { if (!st.bb) bbox(st); const m = st.w * 1.5; a = Math.min(a, st.bb[1] - m); z = Math.max(z, st.bb[3] + m); }
+  for (const o of p.im || []) if (o.dt === day) { a = Math.min(a, o.y); z = Math.max(z, o.y + o.h); }
+  if (a > z) return null;
+  // a page with nothing from earlier days goes whole
+  if (!p.s.some(st => st.dt !== day) && !(p.im || []).some(q => q.dt !== day)) return { y0: 0, y1: p.h, full: true };
+  const pad = 30, y0 = Math.max(0, a - pad), y1 = Math.min(p.h, z + pad);
+  return y1 - y0 > p.h * .9 ? { y0: 0, y1: p.h, full: true } : { y0, y1, full: y0 <= 0 && y1 >= p.h };
+}
+// crop: { y0, y1 } in page units renders only that strip of the page
+export async function renderPage(i, W, crop) {
+  const p = pages[i]; const k = W / DOCW, y0 = crop ? crop.y0 : 0, y1 = crop ? crop.y1 : p.h;
+  const c = document.createElement('canvas'); c.width = Math.round(W); c.height = Math.max(1, Math.round((y1 - y0) * k));
+  const x = c.getContext('2d');
   if (p.k === 'pdf' && pdfDocs[p.d]) {
     x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
     const pg = await pdfDocs[p.d].getPage(p.n); const v1 = pg.getViewport({ scale: 1 });
+    x.translate(0, -y0 * k);
     await pg.render({ canvasContext: x, viewport: pg.getViewport({ scale: c.width / v1.width }) }).promise;
-    x.setTransform(k, 0, 0, k, 0, 0);
-  } else { x.setTransform(k, 0, 0, k, 0, 0); drawPageBg(p, 0, x, false); }
+    x.setTransform(k, 0, 0, k, 0, -y0 * k);
+  } else { x.setTransform(k, 0, 0, k, 0, -y0 * k); drawPageBg(p, 0, x, false); }
   x.lineCap = 'round'; x.lineJoin = 'round';
   for (const o of p.im || []) { const im = await loadImg(o.key); if (im) drawPic(x, im, o); }
   for (const st of p.s) drawStroke(st, x);
@@ -736,7 +751,7 @@ export async function insertImage(file) {
   let w = Math.min(DOCW * .8, im.naturalWidth), h = w * im.naturalHeight / im.naturalWidth;
   if (h > page.h * .8) { h = page.h * .8; w = h * im.naturalWidth / im.naturalHeight; }
   const midY = view.sy + view.H / sc() / 2 - tops[curPage];
-  const o = { id: pid(), key, x: (DOCW - w) / 2, y: Math.max(20, Math.min(page.h - h - 20, midY - h / 2)), w, h };
+  const o = { id: pid(), key, dt: dayStr(), x: (DOCW - w) / 2, y: Math.max(20, Math.min(page.h - h - 20, midY - h / 2)), w, h };
   page.im = page.im || []; snapUndo(page, () => page.im.push(o));
   tool.t = 'lasso'; opts.toolChanged && opts.toolChanged();
   sel = { page, items: [], imgs: [o] }; selBB(); setSel(sel); opts.hint(false);

@@ -1,4 +1,4 @@
-// Builds a notes PDF from chosen board pages (PDF background + your writing). Works offline.
+// Builds a notes PDF from chosen board pages (a number, or { i, crop } for just a strip of a page) (PDF background + your writing). Works offline.
 import * as board from './board.js';
 let jsp = null;
 export function lib() {
@@ -12,7 +12,7 @@ export async function notesPdf(indexes, label, progress, inst = board) {
   const JsPDF = await lib(); let doc = null;
   for (let n = 0; n < indexes.length; n++) {
     progress && progress(n, indexes.length);
-    const c = await inst.renderPage(indexes[n], 1500);
+    const it = indexes[n], c = typeof it === 'number' ? await inst.renderPage(it, 1500) : await inst.renderPage(it.i, 1500, it.crop);
     const w = 595, h = Math.round(595 * c.height / c.width);
     if (!doc) doc = new JsPDF({ unit: 'pt', format: [w, h], orientation: h >= w ? 'portrait' : 'landscape', compress: true });
     else doc.addPage([w, h], h >= w ? 'portrait' : 'landscape');

@@ -42,13 +42,15 @@ function sortedNames(lv, ch, names) {
 const saveNames = () => store.put('kv', 'names', NAMES);
 const chName = (lv, ch) => NAMES.ch[baseOf(lv) + ':' + ch.n] || ch.name;
 const nk = (lv, name) => topicId(baseOf(lv), name);   // key for names, hiding and code (shared by both O Level batches)
+// code is kept apart for each O Level batch: Online uses the shared key, GreenHall its own
+const codeKey = (lv, name) => lv === 'olg' ? topicId('olg', name) : nk(lv, name);
 const tpName = (id, name) => NAMES.tp[id] || name;
 let libEdit = false;
 async function allTopics() {
   const out = []; const custom = await customTopics();
   for (const lv of LEVELS) for (const p of lv.papers) for (const ch of sortedChapters(lv.id, p)) {
     const names = [...ch.topics, ...(ch.legacy || []), ...custom.filter(c => c.lv === baseOf(lv.id) && inChapter(ch, c.ch)).map(c => c.name)];
-    for (const name of names) { const id = topicId(lv.id, name), key = nk(lv.id, name); if (isOut(key)) continue; out.push({ id, orig: name, codeScope: 't:' + key, name: tpName(key, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
+    for (const name of names) { const id = topicId(lv.id, name), key = nk(lv.id, name); if (isOut(key)) continue; out.push({ id, orig: name, codeScope: 't:' + codeKey(lv.id, name), name: tpName(key, name), level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: chName(lv.id, ch), paper: p.id }); }
   }
   return out;
 }
@@ -76,7 +78,7 @@ async function openCodeLab(lv) {
   await board.flush();
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
   const L = LEVELS.find(l => l.id === lv);
-  await closeSplit(); codeCtx = { scope: lv, level: lv, label: 'Code Lab · ' + (lv === 'ol' ? 'O Level' : L.name) };
+  await closeSplit(); codeCtx = { scope: lv, level: baseOf(lv), label: 'Code Lab · ' + (lv === 'ol' ? 'O Level · Online' : L.name) };
   topic = codeTopic(lv); setHeader(codeCtx.label, topic.chips); $('#backCode').hidden = true; codeB.hidden = true;
   $('#lib').hidden = true; document.body.classList.remove('libopen'); setMode('code');
 }
@@ -94,7 +96,7 @@ async function startAnnotate() {
   toast('Making pages from your code…');
   const snap = await ide.snapshotPdf(codeCtx.parent ? `${L.name.replace(' · Online', '')} · ${shortName(codeCtx.parent)}` : L.name.replace(' · Online', '')); if (!snap) { toast('Open a program first'); return; }
   await board.flush();
-  topic = { id: `code:${codeCtx.scope}:${snap.prog}`, name: `${snap.prog} (annotated)`, level: codeCtx.parent ? codeCtx.parent.level : codeCtx.level, levelName: L.name, chips: (codeCtx.parent || L).chips, chapter: 0, chapterName: 'Code', codeLab: true, prog: snap.prog, parent: codeCtx.parent || null };
+  topic = { id: `code:${codeCtx.scope}:${snap.prog}`, name: `${snap.prog} (annotated)`, level: codeCtx.parent ? codeCtx.parent.level : codeCtx.scope, levelName: L.name, chips: (codeCtx.parent || L).chips, chapter: 0, chapterName: 'Code', codeLab: true, prog: snap.prog, parent: codeCtx.parent || null };
   setHeader(`${snap.name} · ${snap.lang === 'py' ? 'Python' : 'Pseudocode'}`, topic.chips);
   await board.load(topic); setMode('board'); $('#backCode').hidden = false; $('#hint').style.opacity = 0;
   const file = new File([snap.blob], snap.name + '.pdf', { type: 'application/pdf' });
@@ -123,7 +125,7 @@ function remapper(prev, snap) {
     return { page: hit.pi, dy: (hit.y - r.y) * px };
   };
 }
-async function backToCode() { if (!codeCtx) return; await board.flush(); topic = codeCtx.parent || codeTopic(codeCtx.level); setHeader(codeCtx.label, topic.chips); $('#backCode').hidden = true; setMode('code'); }
+async function backToCode() { if (!codeCtx) return; await board.flush(); topic = codeCtx.parent || codeTopic(codeCtx.parent ? codeCtx.level : codeCtx.scope); setHeader(codeCtx.label, topic.chips); $('#backCode').hidden = true; setMode('code'); }
 async function openTopic(t) {
   await board.flush();
   if (!history.state || history.state.v !== 'board') history.pushState({ v: 'board' }, '');
@@ -181,10 +183,10 @@ async function renderLib() {
   if (libEdit) { const tip = document.createElement('p'); tip.className = 'help'; tip.textContent = 'Drag ⠿ to change the order. Rename or delete chapters and subtopics; deleted ones go to Trash.'; body.appendChild(tip); }
   const levels = q ? LEVELS : LEVELS.filter(l => l.id === cfg.level);
   if (!q && !libEdit) {
-    const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + baseOf(lv.id) + ':')).length;
+    const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + lv.id + ':')).length;
     const cl = document.createElement('button'); cl.className = 'codecard';
-    cl.innerHTML = `<span class="cic"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/></svg></span><span><small>CODE LAB · ${esc(baseOf(lv.id) === 'ol' ? 'O LEVEL (BOTH BATCHES)' : lv.name.toUpperCase())}</small><strong>${lv.id === 'a2' ? 'Python' : 'Pseudocode and Python'}</strong><em>Write, run and annotate programs. Text files included.</em></span><span class="meta">${progs ? progs + (progs === 1 ? ' program' : ' programs') : 'Open'}</span>`;
-    cl.onclick = () => openCodeLab(baseOf(lv.id)); body.appendChild(cl);
+    cl.innerHTML = `<span class="cic"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/></svg></span><span><small>CODE LAB · ${esc(lv.id === 'ol' ? 'O LEVEL · ONLINE' : lv.name.toUpperCase())}</small><strong>${lv.id === 'a2' ? 'Python' : 'Pseudocode and Python'}</strong><em>Write, run and annotate programs. Text files included.</em></span><span class="meta">${progs ? progs + (progs === 1 ? ' program' : ' programs') : 'Open'}</span>`;
+    cl.onclick = () => openCodeLab(lv.id); body.appendChild(cl);
   }
   let shown = 0;
   for (const lv of levels) for (const p of lv.papers) {
@@ -225,7 +227,7 @@ async function renderLib() {
             NAMES.trash.push({ kind: 'topic', key, base: baseOf(lv.id), ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); };
           b.append(rn, hd);
         } else {
-          b.onclick = () => { if (b._held) { b._held = false; return; } openTopic({ id, orig, codeScope: 't:' + key, name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id }); };
+          b.onclick = () => { if (b._held) { b._held = false; return; } openTopic({ id, orig, codeScope: 't:' + codeKey(lv.id, orig), name, level: lv.id, levelName: lv.name, chips: lv.chips, chapter: ch.n, chapterLabel: chLabel(ch), chapterName: cName, paper: p.id }); };
           if (!q) holdable(b, b, card, '.tp', false, async keys => { NAMES.order.tp[baseOf(lv.id) + ':' + ch.n] = keys; await saveNames(); }, [
             ['Rename subtopic', () => inlineEdit(b.querySelector('.nm'), name, async v => { if (v && v !== orig) NAMES.tp[key] = v; else delete NAMES.tp[key]; await saveNames(); renderLib(); })],
             ['Move to Trash', async () => { NAMES.trash.push({ kind: 'topic', key, base: baseOf(lv.id), ch: ch.n, orig, name, level: lv.name, chapter: cName, at: Date.now() }); await saveNames(); toast('Subtopic moved to Trash. Its notes and code are kept until you delete it forever.'); renderLib(); }, true]]);
@@ -377,10 +379,12 @@ async function purgeNotes(id) {
 }
 async function purgeTopic(base, orig, key) {
   for (const v of base === 'ol' ? ['ol', 'olg'] : [base]) await purgeNotes(topicId(v, orig));
-  for (const p of ['cp:t:', 'cf:t:']) await store.delPrefix('kv', p + key + ':');
-  for (const k of ['ideInit:t:', 'ideLast:t:']) await store.del('kv', k + key);
-  for (const [id] of await store.getPrefix('topics', 'code:t:' + key + ':')) await purgeNotes(id);
-  await store.delPrefix('kv', 'annlay:code:t:' + key + ':');
+  for (const ck of base === 'ol' ? [key, topicId('olg', orig)] : [key]) {
+    for (const p of ['cp:t:', 'cf:t:']) await store.delPrefix('kv', p + ck + ':');
+    for (const k of ['ideInit:t:', 'ideLast:t:']) await store.del('kv', k + ck);
+    for (const [id] of await store.getPrefix('topics', 'code:t:' + ck + ':')) await purgeNotes(id);
+    await store.delPrefix('kv', 'annlay:code:t:' + ck + ':');
+  }
   const c = (await customTopics()).filter(x => !(x.lv === base && x.name === orig)); await store.put('kv', 'custom', c);
 }
 async function purge(t) {
@@ -896,6 +900,10 @@ async function openShare() {
   await A.flush();
   const info = A.pageInfo(), t = A === board ? topic : b2topic;
   const touchedIx = info.filter(p => p.touched).map(p => p.i);
+  // where today's writing is on each page; a page that also has older writing sends only today's strip
+  info.forEach(p => { p.band = A.todayBand ? A.todayBand(p.i) : null; });
+  const parts = info.filter(p => p.band && !p.band.full).length;
+  let onlyNew = cfg.onlyNew !== false;
   let sel = new Set(); if (touchedIx.length) for (let i = Math.min(...touchedIx); i <= Math.max(...touchedIx); i++) sel.add(i);
   const recs = (await store.all('recs')).map(([, v]) => v).filter(r => r.topicId === t.id && r.status === 'done' && !r.drive).sort((a, b) => b.started - a.started);
   const queued = new Set((await drive.jobs()).filter(j => j.src.type === 'rec').map(j => j.src.id));
@@ -905,6 +913,7 @@ async function openShare() {
     <p class="help">Goes to <b>${esc([drive.settings().root || 'CSwithSR Classes', ...drivePath(t)].join(' › '))}</b></p>
     <div class="row"><strong style="font-size:14px">Notes pages</strong><span id="shSel" class="help"></span></div>
     <div class="row"><button id="shT1">Pages I wrote on in this class</button><button id="shAll">All pages</button><button id="shNone">None</button></div>
+    ${parts ? `<label class="tog" for="shNew"><input type="checkbox" id="shNew" ${cfg.onlyNew !== false ? 'checked' : ''}> Only today's part of a page that has older writing (${parts === 1 ? '1 page' : parts + ' pages'}). The highlighted strip is what gets sent.</label>` : ''}
     <div class="thumbs" id="thumbs"></div>
     <div id="shRecs" style="display:grid;gap:8px"></div>
     <div class="row"><button class="primary" id="shGo">Send to Drive</button><button id="shSave">Save PDF to tablet</button><button id="shClose">Cancel</button></div>
@@ -913,11 +922,12 @@ async function openShare() {
   const close = () => w.remove(); q('#shClose').onclick = close; w.addEventListener('click', e => { if (e.target === w) close(); });
   const boxes = [];
   info.forEach(p => { const b = document.createElement('button'); b.type = 'button'; b.className = 'thumb'; b.setAttribute('aria-label', 'Page ' + (p.i + 1));
-    b.innerHTML = `<span class="tn">${p.i + 1}</span>${p.touched ? '<span class="tw">this class</span>' : ''}`;
+    b.innerHTML = `<span class="tn">${p.i + 1}</span>${p.touched ? '<span class="tw">this class</span>' : ''}${p.band && !p.band.full ? `<span class="band" style="top:${p.band.y0 / 13}%;height:${(p.band.y1 - p.band.y0) / 13}%"></span>` : ''}`;
     b.onclick = () => { sel.has(p.i) ? sel.delete(p.i) : sel.add(p.i); paintSel(); }; q('#thumbs').appendChild(b); boxes.push(b); });
-  const paintSel = () => { boxes.forEach((b, i) => b.classList.toggle('on', sel.has(i))); const ix = [...sel].sort((a, b) => a - b);
+  const paintSel = () => { boxes.forEach((b, i) => { b.classList.toggle('on', sel.has(i)); b.classList.toggle('part', onlyNew && !!info[i].band && !info[i].band.full); }); const ix = [...sel].sort((a, b) => a - b);
     q('#shSel').textContent = ix.length ? `${ix.length} selected (pages ${ranges(ix)})` : 'No pages selected'; };
   paintSel();
+  if (q('#shNew')) q('#shNew').onchange = e => { onlyNew = e.target.checked; cfg.onlyNew = onlyNew; saveCfg(); paintSel(); };
   q('#shT1').onclick = () => { sel = new Set(touchedIx); paintSel(); if (!touchedIx.length) toast('You have not written on any page since opening this topic'); };
   q('#shAll').onclick = () => { sel = new Set(info.map(p => p.i)); paintSel(); };
   q('#shNone').onclick = () => { sel = new Set(); paintSel(); };
@@ -930,7 +940,8 @@ async function openShare() {
   }
   const makePdf = async () => {
     const ix = [...sel].sort((a, b) => a - b); if (!ix.length) return null; q('#shGo').disabled = q('#shSave').disabled = true;
-    try { return { blob: await notesPdf(ix, `${t.name} · ${today()}`, (n, m) => { q('#shSel').textContent = `Making the PDF… page ${n + 1} of ${m}`; }, A), ix }; }
+    const items = ix.map(i => onlyNew && info[i].band && !info[i].band.full ? { i, crop: info[i].band } : i);
+    try { return { blob: await notesPdf(items, `${t.name} · ${today()}`, (n, m) => { q('#shSel').textContent = `Making the PDF… page ${n + 1} of ${m}`; }, A), ix }; }
     finally { q('#shGo').disabled = q('#shSave').disabled = false; }
   };
   const pdfName = ix => clean(`${t.name}${batchTag(t) ? ' - ' + batchTag(t) : ''} - ${today()} - Notes (pages ${ranges(ix)}).pdf`);
