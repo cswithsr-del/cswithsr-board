@@ -34,22 +34,30 @@ const keepToken = () => store.put('kv', 'dtok', { token, exp: tokenExp }).catch(
 // The Drive helper is a small Google Apps Script in your own Google account. It hands the app a fresh Drive key
 // whenever needed, so the app stays connected without sign-in windows.
 async function helperToken() {
-  const r = await fetch(cfg.helper + (cfg.helper.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(cfg.hkey), { cache: 'no-store' });
-  const j = await r.json(); if (!j.token) throw new Error(j.error === 'denied' ? 'The Drive helper refused the key. Copy the helper script again from Settings.' : 'The Drive helper did not answer.');
-  token = j.token; tokenExp = Date.now() + 45 * 60000; if (j.email && cfg.email !== j.email) { cfg.email = j.email; await store.put('kv', 'drive', cfg); }
-  keepToken(); setState({ needsSignIn: false }); return true;
+  let r, txt;
+  try { r = await fetch(cfg.helper + (cfg.helper.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(cfg.hkey), { cache: 'no-store', signal: AbortSignal.timeout(25000) }); txt = await r.text(); }
+  catch (e) { throw new Error('Drive helper not reachable (' + (e.name === 'TimeoutError' ? 'no answer in 25 s' : 'no internet?') + '). Trying again automatically.'); }
+  let j; try { j = JSON.parse(txt); } catch (e) { throw new Error('The Drive helper answered with a web page instead of a key. In the script: Deploy, Manage deployments, set "Who has access" to Anyone, and paste the /exec Web app URL in Settings.'); }
+  if (!j.token) throw new Error(j.error === 'denied' ? 'The Drive helper refused the key. Copy the helper script again from Settings.' : 'The Drive helper did not answer.');
+  token = j.token; tokenExp = Date.now() + 30 * 60000;
+  // ask Google how long this key really lasts (the helper may hand over a key that is already half used)
+  try {
+    const ti = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), { signal: AbortSignal.timeout(15000) });
+    if (ti.ok) { const k = await ti.json(); const left = +k.expires_in; if (left > 0) tokenExp = Date.now() + Math.max(60, left - 120) * 1000; scopeOk = /auth\/drive(\s|$)/.test(k.scope || ''); }
+  } catch (e) {}
+  if (j.email && cfg.email !== j.email) { cfg.email = j.email; await store.put('kv', 'drive', cfg); }
+  keepToken(); setState({ needsSignIn: false, msg: '' }); return true;
 }
+let scopeOk = true;
 export async function ensureToken() {
   if (haveToken()) return true;
+  token = null;
   if (cfg.helper && cfg.hkey) { try { return await helperToken(); } catch (e) { setState({ msg: e.message }); return false; } }
   return false;
 }
 export async function testHelper() {
   token = null; tokenExp = 0; await helperToken();
-  try {   // does the helper's pass include Drive? (the Drive box must be ticked when allowing the script)
-    const r = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token));
-    if (r.ok) { const j = await r.json(); if (!/auth\/drive(\s|$)/.test(j.scope || '')) { token = null; tokenExp = 0; throw new Error('The helper works but has no Drive permission. In your script tap Run on authorize again and tick “Select all” (the Drive box) before Continue. If it does not ask, first remove the script at myaccount.google.com/connections.'); } }
-  } catch (e) { if (/no Drive permission/.test(e.message)) throw e; }
+  if (!scopeOk) { token = null; tokenExp = 0; throw new Error('The helper works but has no Drive permission. In your script tap Run on authorize again and tick “Select all” (the Drive box) before Continue. If it does not ask, first remove the script at myaccount.google.com/connections.'); }
   return cfg.email;
 }
 export function newKey() { const a = new Uint8Array(24); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
@@ -109,33 +117,39 @@ export async function enqueue(job) {
   await saveJob(j); emit(); pump(); return j;
 }
 export async function remove(id) { const j = await store.get('kv', 'job:' + id); if (j && j.src.type === 'blob') await store.del('blobs', j.src.key); await store.del('kv', 'job:' + id); emit(); }
-export async function retry(id) { const j = await store.get('kv', 'job:' + id); if (j) { j.status = 'queued'; j.err = ''; delete j._reset; fails = 0; await saveJob(j); emit(); pump(); } }
+export async function retry(id) { const j = await store.get('kv', 'job:' + id); if (j) { j.status = 'queued'; j.err = ''; j.autoTries = 0; delete j._reset; fails = 0; await saveJob(j); emit(); pump(); } }
 
-let fails = 0, retryT = 0;
+let fails = 0, retryT = 0, authFails = 0;
+const AUTO = /helper|permission|Signed out|expired|refusing|busy|did not answer|internet|Network|Drive refused the upload|folder/i;
 export async function pump() {
   if (running) return; running = true; clearTimeout(retryT);
   try {
+    // uploads that stopped because of the connection, an expired key or the helper are tried again by themselves
+    for (const j of await jobs()) if (j.status === 'error' && AUTO.test(j.err || '') && (j.autoTries || 0) < 6 && Date.now() - (j.errAt || 0) > 90000) { j.status = 'queued'; j.autoTries = (j.autoTries || 0) + 1; delete j._reset; await saveJob(j); }
     while (true) {
       const next = (await jobs()).find(j => j.status === 'queued' || j.status === 'uploading');
       if (!next) { setState({ msg: '' }); break; }
       if (!navigator.onLine) { setState({ msg: 'Waiting for internet' }); clearTimeout(retryT); retryT = setTimeout(pump, 15000); break; }
       if (!cfg.clientId && !cfg.helper) { setState({ msg: 'Connect Google Drive in Settings to start uploading' }); break; }
-      if (!(await ensureToken())) { setState({ needsSignIn: !cfg.helper, msg: cfg.helper ? state.msg || 'Drive helper not reachable' : 'Tap “Connect Drive” to continue uploading' }); break; }
-      try { await upload(next); fails = 0; }
+      if (!(await ensureToken())) {
+        setState({ needsSignIn: !cfg.helper, msg: cfg.helper ? state.msg || 'Drive helper not reachable. Trying again automatically.' : 'Tap “Connect Drive” to continue uploading' });
+        if (cfg.helper) { clearTimeout(retryT); retryT = setTimeout(pump, 20000); }
+        break; }
+      try { await upload(next); fails = 0; authFails = 0; }
       catch (e) {
-        if (e.auth) { token = null; tokenExp = 0; if (cfg.helper && !next._authRetry) { next._authRetry = 1; continue; } setState({ needsSignIn: !cfg.helper, msg: 'Tap “Connect Drive” to continue uploading' }); break; }
+        if (e.auth) { token = null; tokenExp = 0; if (cfg.helper) { authFails++; if (authFails < 3) continue; authFails = 0; setState({ msg: 'Drive key refused. Trying again automatically.' }); clearTimeout(retryT); retryT = setTimeout(pump, 30000); break; } setState({ needsSignIn: !cfg.helper, msg: 'Tap “Connect Drive” to continue uploading' }); break; }
         if (e.net || !navigator.onLine) {
           // Is the internet really down, or did only this upload's link fail? Ask Drive something small.
           let netOk = false;
           if (navigator.onLine) { try { const p = await call('https://www.googleapis.com/drive/v3/about?fields=user'); netOk = p.ok; } catch (x) {} }
           if (netOk && !next._reset) { next._reset = 1; next.session = null; next.offset = 0; next.status = 'queued'; await saveJob(next); continue; }   // start this file's upload again
-          if (netOk) { next.status = 'error'; next.err = 'The internet works, but Drive keeps refusing this file. Tap Retry. If it fails again, take a screenshot of this message and send it to Claude. [' + (e.where || '?') + ': ' + (e.detail || e.message) + ']'; await saveJob(next); emit(); continue; }
+          if (netOk) { next.status = 'error'; next.errAt = Date.now(); next.err = 'The internet works, but Drive keeps refusing this file. Tap Retry. If it fails again, take a screenshot of this message and send it to Claude. [' + (e.where || '?') + ': ' + (e.detail || e.message) + ']'; await saveJob(next); emit(); continue; }
           next.status = 'queued'; await saveJob(next);
           fails++; const wait = Math.min(60, [5, 10, 20, 30, 60][Math.min(fails - 1, 4)]);
           setState({ msg: (navigator.onLine ? 'Connection to Drive failed. Trying again in ' + wait + ' s' : 'Waiting for internet') + (e.message && e.message !== 'Network' ? ' (' + e.message + ')' : '') });
           clearTimeout(retryT); retryT = setTimeout(pump, wait * 1000); break;
         }
-        next.status = 'error'; next.err = e.message; await saveJob(next); emit();
+        next.status = 'error'; next.err = e.message; next.errAt = Date.now(); await saveJob(next); emit();
       }
     }
   } finally { running = false; }
@@ -143,8 +157,8 @@ export async function pump() {
 
 async function call(url, init = {}) {
   let r;
-  try { r = await fetch(url, { ...init, headers: { Authorization: 'Bearer ' + token, ...(init.headers || {}) } }); }
-  catch (e) { const er = new Error('Network'); er.net = true; er.where = /upload_id|uploadType/.test(url) ? 'upload' : /about/.test(url) ? 'check' : 'folders'; er.detail = e.message; throw er; }
+  try { r = await fetch(url, { ...init, signal: AbortSignal.timeout(init.body && typeof init.body !== 'string' ? 240000 : 40000), headers: { Authorization: 'Bearer ' + token, ...(init.headers || {}) } }); }
+  catch (e) { const er = new Error(e.name === 'TimeoutError' ? 'Drive did not answer in time' : 'Network'); er.net = true; er.where = /upload_id|uploadType/.test(url) ? 'upload' : /about/.test(url) ? 'check' : 'folders'; er.detail = e.message; throw er; }
   if (r.status === 401) { const er = new Error('Signed out'); er.auth = true; throw er; }
   return r;
 }
@@ -198,6 +212,7 @@ async function upload(j) {
     await saveJob(j);
   }
   while (j.offset < total) {
+    if (cfg.helper && tokenExp - Date.now() < 4 * 60000) await helperToken();   // fresh key before it runs out mid-upload
     const end = Math.min(j.offset + CHUNK, total);
     let body;   // read this piece first, so a damaged file on the tablet is not mistaken for no internet
     try { body = await blob.slice(j.offset, end).arrayBuffer(); } catch (x) { throw new Error('This recording could not be read from the tablet storage. Record again or download it from Recordings.'); }
@@ -211,7 +226,7 @@ async function upload(j) {
   }
 }
 async function finish(j, info) {
-  j.status = 'done'; j.offset = j.total; j.fileId = info.id; j.link = info.webViewLink || ''; j.done = Date.now(); j.session = null;
+  j.status = 'done'; j.autoTries = 0; j.offset = j.total; j.fileId = info.id; j.link = info.webViewLink || ''; j.done = Date.now(); j.session = null;
   await saveJob(j); if (j.src.type === 'blob') await store.del('blobs', j.src.key);
   if (j.src.type === 'rec') { const m = await store.get('recs', j.src.id); if (m) { m.drive = j.link || 'uploaded'; await store.put('recs', m.id, m); } }
   emit();
