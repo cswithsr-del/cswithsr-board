@@ -70,8 +70,20 @@ export async function testHelper() {
   try { await helperToken(); }
   catch (e) { if (keep.token && Date.now() < keep.tokenExp) { token = keep.token; tokenExp = keep.tokenExp; tokenSrc = keep.tokenSrc; } throw e; }
   const r = await fetch('https://www.googleapis.com/drive/v3/about?fields=user', { headers: { Authorization: 'Bearer ' + token }, signal: tmo(30000) });
-  if (r.status === 403) { token = null; tokenExp = 0; throw new Error('The helper works but has no Drive permission. In the script editor choose the function "authorize", tap Run and allow everything (tick "Select all"). Then Deploy, Manage deployments, Edit, New version, Deploy, and tap Test again.'); }
-  if (!r.ok) { token = null; tokenExp = 0; throw new Error('Drive did not accept the helper key (' + r.status + '). Run "authorize" once in the script, then Deploy a new version and Test again.'); }
+  if (!r.ok) {
+    let msg = '', reason = '', scopes = '';
+    try { const j = await r.json(); msg = (j.error && j.error.message) || ''; reason = (j.error && j.error.errors && j.error.errors[0] && j.error.errors[0].reason) || ''; } catch (e) {}
+    try { const ti = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), { signal: tmo(15000) }); if (ti.ok) scopes = ((await ti.json()).scope || '').replace(/https:\/\/www\.googleapis\.com\/auth\//g, ''); } catch (e) {}
+    token = null; tokenExp = 0;
+    const m = msg.match(/project[s/ ]+(\d{6,})/i);
+    if (/has not been used|is disabled|SERVICE_DISABLED|accessNotConfigured/i.test(msg + reason)) {
+      const own = (cfg.clientId.match(/^(\d{6,})-/) || [])[1];
+      const e = new Error('The helper works, but the Google Drive API is switched off for the helper\'s Google project' + (m ? ' (' + m[1] + ')' : '') + '. ' + (own
+        ? 'Easiest fix: link the script to your own Google Cloud project, which already has Drive on. In the script editor: ⚙ Project Settings, Google Cloud Platform (GCP) Project, Change project, type ' + own + ', Set project. Then pick "authorize", tap Run, allow everything. Then Deploy, Manage deployments, Edit, New version, Deploy, and Test again.'
+        : 'Open the link below, tap ENABLE, wait 2 minutes, then Test again.'));
+      e.link = 'https://console.developers.google.com/apis/api/drive.googleapis.com/overview' + (m ? '?project=' + m[1] : ''); throw e; }
+    throw new Error('The helper works but has no Drive permission (' + r.status + (reason ? ' ' + reason : '') + '). Key permissions: ' + (scopes || 'unknown') + '. Fix: open myaccount.google.com/connections, remove the helper script, then in the script editor pick "authorize", tap Run, and on Google\'s screen tick "Select all" before Continue. Then Deploy, Manage deployments, Edit, New version, Deploy, and Test again.');
+  }
   await store.put('kv', 'helperOk', Date.now());
   return cfg.email;
 }
