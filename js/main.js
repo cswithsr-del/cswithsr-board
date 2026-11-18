@@ -3,6 +3,7 @@ import * as board from './board.js';
 import * as bg from './bg.js';
 import * as cam from './cam.js';
 import * as rec from './rec.js';
+import { fixVideo } from './fixvid.js';
 import { LEVELS, topicId, chLabel, inChapter, baseOf, sibling, isRec } from './syllabus.js';
 import * as drive from './drive.js';
 import * as ide from './ide.js';
@@ -271,9 +272,24 @@ async function renderLib() {
 }
 const fmtDur = s => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
 const fmtSize = b => b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(0) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB';
+// repair a recording saved before this fix (or any browser-made video) so editors accept it
+function fixFileBtn(body) {
+  const row = document.createElement('div'); row.className = 'row'; row.style.cssText = 'margin:0 0 14px;align-items:center;gap:12px;flex-wrap:wrap';
+  row.innerHTML = `<button class="ghost" id="fixPick">Fix an old video file</button><span class="help" style="margin:0">For recordings downloaded before this update: makes the time bar and DaVinci Resolve work.</span><input type="file" accept="video/*,.webm,.mp4" hidden>`;
+  const inp = row.querySelector('input'); row.querySelector('#fixPick').onclick = () => inp.click();
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return; toast('Fixing ' + f.name + '…');
+    const out = await fixVideo(f); inp.value = '';
+    if (out === f) return toast('This file already works or could not be read. Nothing changed.');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(out); a.download = f.name.replace(/(\.\w+)?$/, ' (fixed)$1'); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    toast('Fixed. Saved to your Downloads folder.');
+  };
+  body.appendChild(row);
+}
 function renderRecs(body, recs) {
+  fixFileBtn(body);
   recs.sort((a, b) => b.started - a.started);
-  if (!recs.length) { body.innerHTML = '<p class="empty">No recordings yet. Open a topic and tap the red record button on the left.</p>'; return; }
+  if (!recs.length) { body.insertAdjacentHTML('beforeend', '<p class="empty">No recordings yet. Open a topic and tap the red record button on the left.</p>'); return; }
   const list = document.createElement('div'); list.className = 'recs';
   for (const r of recs) {
     const row = document.createElement('div'); row.className = 'recrow';

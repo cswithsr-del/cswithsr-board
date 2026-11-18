@@ -2,6 +2,7 @@
 // Video is composited into an off-screen canvas; chunks are written to IndexedDB every 3 s so a crash loses at most a few seconds.
 import * as store from './store.js';
 import * as cam from './cam.js';
+import { fixVideo } from './fixvid.js';
 
 let rec = null, opts;
 const $ = s => document.querySelector(s);
@@ -72,14 +73,16 @@ function tick() {
 export function pause() { if (!rec) return; if (rec.paused) { rec.mr.resume(); rec.paused = false; rec.since = performance.now(); } else { rec.mr.pause(); rec.paused = true; rec.acc += performance.now() - rec.since; } tick(); }
 export async function stop() {
   if (!rec) return null; const r = rec; clearInterval(r.timer);
-  r.meta.dur = elapsed(); r.mr.stop(); await r.done;
+  r.meta.durMs = Math.round(r.acc + (r.paused ? 0 : performance.now() - r.since)); r.meta.dur = elapsed(); r.mr.stop(); await r.done;
   r.meta.status = 'done'; await store.put('recs', r.meta.id, r.meta);
   if (r.mic) r.mic.getTracks().forEach(t => t.stop()); if (r.ac) r.ac.close();
   rec = null; opts.status(null); return r.meta;
 }
 export async function blobFor(id) {
   const m = await store.get('recs', id); const parts = (await store.getPrefix('blobs', 'rec:' + id + ':')).map(([, v]) => v);
-  return new Blob(parts, { type: (m && m.mime || 'video/webm').split(';')[0] });
+  const raw = new Blob(parts, { type: (m && m.mime || 'video/webm').split(';')[0] });
+  // browser recordings have no index or duration: rebuild into a normal, seekable file (editors such as DaVinci Resolve need it)
+  return fixVideo(raw, m && (m.durMs || m.dur * 1000));
 }
 export async function remove(id) { await store.delPrefix('blobs', 'rec:' + id + ':'); await store.del('recs', id); }
 
