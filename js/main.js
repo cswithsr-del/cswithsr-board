@@ -808,8 +808,8 @@ async function openSettings() {
   q('#hTest').onclick = async () => {
     const u = q('#hUrl').value.trim(); if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(u)) { q('#hStat').textContent = 'Paste the Web app URL that starts with https://script.google.com/'; return; }
     await drive.saveSettings({ helper: u }); q('#hStat').textContent = 'Testing…';
-    try { const em = await drive.testHelper(); q('#hStat').textContent = 'Connected as ' + em + '. Drive stays connected now.'; drive.pump(); dstat(); }
-    catch (e) { q('#hStat').textContent = e.message + ' Check that access is set to Anyone and that you ran authorize once.'; }
+    try { const em = await drive.testHelper(); q('#hStat').textContent = '✓ Helper works: connected as ' + em + '. Uploads now get fresh keys by themselves; no more Reconnect.'; drive.pump(); dstat(); }
+    catch (e) { q('#hStat').textContent = '✗ ' + e.message; }
   };
   q('#hOff').onclick = async () => { await drive.saveSettings({ helper: '' }); q('#hUrl').value = ''; q('#hStat').textContent = 'Helper removed'; };
   q('#dConn').onclick = async () => { await keepDrive(); try { await drive.signIn(true); toast('Google Drive connected'); } catch (e) { toast(e.message); } dstat(); };

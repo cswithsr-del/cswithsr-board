@@ -19,7 +19,7 @@ export async function init(o) {
   blobSource = o.blobSource;
   Object.assign(cfg, (await store.get('kv', 'drive')) || {});
   // a sign-in from earlier today is still valid after the app is reopened
-  const saved = await store.get('kv', 'dtok'); if (saved && saved.exp > Date.now() + 60000) { token = saved.token; tokenExp = saved.exp; }
+  const saved = await store.get('kv', 'dtok'); if (saved && saved.exp > Date.now() + 60000) { token = saved.token; tokenExp = saved.exp; tokenSrc = saved.src || ''; }
   // anything interrupted mid-upload goes back to the queue
   for (const j of await jobs()) if (j.status === 'uploading') { j.status = 'queued'; await saveJob(j); }
   addEventListener('online', () => pump());
@@ -30,34 +30,49 @@ export async function init(o) {
 }
 export async function saveSettings(s) { Object.assign(cfg, s); await store.put('kv', 'drive', cfg); emit(); }
 export const connected = () => !!cfg.helper || (!!cfg.clientId && !!cfg.email);
-const keepToken = () => store.put('kv', 'dtok', { token, exp: tokenExp }).catch(() => {});
+const keepToken = () => store.put('kv', 'dtok', { token, exp: tokenExp, src: tokenSrc }).catch(() => {});
 // The Drive helper is a small Google Apps Script in your own Google account. It hands the app a fresh Drive key
 // whenever needed, so the app stays connected without sign-in windows.
+// a timeout that also works on older tablet browsers (AbortSignal.timeout is missing there)
+function tmo(ms) { if (AbortSignal.timeout) return AbortSignal.timeout(ms); const c = new AbortController(); setTimeout(() => c.abort(new DOMException('timeout', 'TimeoutError')), ms); return c.signal; }
+let tokenSrc = '';   // 'helper' or 'signin': where the current key came from
+async function helperFetch() {
+  const url = cfg.helper + (cfg.helper.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(cfg.hkey) + '&t=' + Date.now();
+  let last;
+  for (let i = 0; i < 2; i++) {   // Apps Script sometimes needs a slow first start: try twice
+    try { const r = await fetch(url, { cache: 'no-store', redirect: 'follow', signal: tmo(60000) }); return { status: r.status, txt: await r.text() }; }
+    catch (e) { last = e; await new Promise(ok => setTimeout(ok, 1500)); }
+  }
+  throw new Error('Drive helper not reachable (' + (last && last.name === 'TimeoutError' ? 'no answer in 60 s' : 'no internet, or the helper link is wrong') + '). Trying again automatically.');
+}
 async function helperToken() {
-  let r, txt;
-  try { r = await fetch(cfg.helper + (cfg.helper.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(cfg.hkey), { cache: 'no-store', signal: AbortSignal.timeout(25000) }); txt = await r.text(); }
-  catch (e) { throw new Error('Drive helper not reachable (' + (e.name === 'TimeoutError' ? 'no answer in 25 s' : 'no internet?') + '). Trying again automatically.'); }
-  let j; try { j = JSON.parse(txt); } catch (e) { throw new Error('The Drive helper answered with a web page instead of a key. In the script: Deploy, Manage deployments, set "Who has access" to Anyone, and paste the /exec Web app URL in Settings.'); }
-  if (!j.token) throw new Error(j.error === 'denied' ? 'The Drive helper refused the key. Copy the helper script again from Settings.' : 'The Drive helper did not answer.');
-  token = j.token; tokenExp = Date.now() + 30 * 60000;
-  // ask Google how long this key really lasts (the helper may hand over a key that is already half used)
-  try {
-    const ti = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), { signal: AbortSignal.timeout(15000) });
-    if (ti.ok) { const k = await ti.json(); const left = +k.expires_in; if (left > 0) tokenExp = Date.now() + Math.max(60, left - 120) * 1000; scopeOk = /auth\/drive(\s|$)/.test(k.scope || ''); }
+  const { status, txt } = await helperFetch();
+  let j; try { j = JSON.parse(txt); } catch (e) {
+    const page = /accounts\.google|ServiceLogin|sign in/i.test(txt) ? 'a Google sign-in page' : /not found|404/i.test(txt) || status === 404 ? '"page not found"' : 'a web page (' + status + ')';
+    throw new Error('The Drive helper answered with ' + page + ' instead of a key. In the script: Deploy, Manage deployments, Edit, set Execute as "Me" and Who has access "Anyone", Deploy, then paste the /exec Web app URL in Settings and tap Test.'); }
+  if (!j.token) throw new Error(j.error === 'denied' ? 'The Drive helper refused the key: the script in Google and the app have different keys. Tap "Copy helper script" in Settings, paste it over the old script, Deploy a new version, then Test.' : 'The Drive helper did not answer with a key (' + (j.error || 'empty') + ').');
+  token = j.token; tokenSrc = 'helper'; tokenExp = Date.now() + 25 * 60000;
+  try {   // how long this key really lasts (the helper may hand over a key that is already half used)
+    const ti = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), { signal: tmo(15000) });
+    if (ti.ok) { const k = await ti.json(); const left = +k.expires_in; if (left > 0) tokenExp = Date.now() + Math.max(60, left - 120) * 1000; }
   } catch (e) {}
   if (j.email && cfg.email !== j.email) { cfg.email = j.email; await store.put('kv', 'drive', cfg); }
   keepToken(); setState({ needsSignIn: false, msg: '' }); return true;
 }
-let scopeOk = true;
 export async function ensureToken() {
   if (haveToken()) return true;
-  token = null;
-  if (cfg.helper && cfg.hkey) { try { return await helperToken(); } catch (e) { setState({ msg: e.message }); return false; } }
-  return false;
+  if (cfg.helper && cfg.hkey) { try { return await helperToken(); } catch (e) { token = null; setState({ msg: e.message }); return false; } }
+  token = null; return false;
 }
+// Test = get a key from the helper AND use it on Drive, so "Connected" really means uploads will work
 export async function testHelper() {
-  token = null; tokenExp = 0; await helperToken();
-  if (!scopeOk) { token = null; tokenExp = 0; throw new Error('The helper works but has no Drive permission. In your script tap Run on authorize again and tick “Select all” (the Drive box) before Continue. If it does not ask, first remove the script at myaccount.google.com/connections.'); }
+  const keep = { token, tokenExp, tokenSrc };
+  try { await helperToken(); }
+  catch (e) { if (keep.token && Date.now() < keep.tokenExp) { token = keep.token; tokenExp = keep.tokenExp; tokenSrc = keep.tokenSrc; } throw e; }
+  const r = await fetch('https://www.googleapis.com/drive/v3/about?fields=user', { headers: { Authorization: 'Bearer ' + token }, signal: tmo(30000) });
+  if (r.status === 403) { token = null; tokenExp = 0; throw new Error('The helper works but has no Drive permission. In the script editor choose the function "authorize", tap Run and allow everything (tick "Select all"). Then Deploy, Manage deployments, Edit, New version, Deploy, and tap Test again.'); }
+  if (!r.ok) { token = null; tokenExp = 0; throw new Error('Drive did not accept the helper key (' + r.status + '). Run "authorize" once in the script, then Deploy a new version and Test again.'); }
+  await store.put('kv', 'helperOk', Date.now());
   return cfg.email;
 }
 export function newKey() { const a = new Uint8Array(24); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
@@ -94,7 +109,7 @@ export async function signIn(interactive = true) {
       callback: async r => {
         if (r.error) return no(new Error(r.error_description || r.error));
         if (!google.accounts.oauth2.hasGrantedAllScopes(r, SCOPE)) { token = null; return no(new Error('Google Drive permission was not ticked. Tap Connect Drive again and tick the box that lets CSwithSR Board use its Drive files.')); }
-        token = r.access_token; tokenExp = Date.now() + (r.expires_in - 120) * 1000; keepToken();
+        token = r.access_token; tokenSrc = 'signin'; tokenExp = Date.now() + (r.expires_in - 120) * 1000; keepToken();
         try { const u = await (await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + token } })).json(); if (u.email) cfg.email = u.email; await store.put('kv', 'drive', cfg); } catch (e) {}
         setState({ needsSignIn: false, msg: '' }); ok(); pump();
       },
@@ -157,7 +172,7 @@ export async function pump() {
 
 async function call(url, init = {}) {
   let r;
-  try { r = await fetch(url, { ...init, signal: AbortSignal.timeout(init.body && typeof init.body !== 'string' ? 240000 : 40000), headers: { Authorization: 'Bearer ' + token, ...(init.headers || {}) } }); }
+  try { r = await fetch(url, { ...init, signal: tmo(init.body && typeof init.body !== 'string' ? 240000 : 40000), headers: { Authorization: 'Bearer ' + token, ...(init.headers || {}) } }); }
   catch (e) { const er = new Error(e.name === 'TimeoutError' ? 'Drive did not answer in time' : 'Network'); er.net = true; er.where = /upload_id|uploadType/.test(url) ? 'upload' : /about/.test(url) ? 'check' : 'folders'; er.detail = e.message; throw er; }
   if (r.status === 401) { const er = new Error('Signed out'); er.auth = true; throw er; }
   return r;
@@ -212,7 +227,8 @@ async function upload(j) {
     await saveJob(j);
   }
   while (j.offset < total) {
-    if (cfg.helper && tokenExp - Date.now() < 4 * 60000) await helperToken();   // fresh key before it runs out mid-upload
+    // fresh key before the current one runs out mid-upload; if the helper fails, keep using the key while it lasts
+    if (cfg.helper && tokenExp - Date.now() < 4 * 60000) { try { await helperToken(); } catch (e) { if (!haveToken()) throw e; } }
     const end = Math.min(j.offset + CHUNK, total);
     let body;   // read this piece first, so a damaged file on the tablet is not mistaken for no internet
     try { body = await blob.slice(j.offset, end).arrayBuffer(); } catch (x) { throw new Error('This recording could not be read from the tablet storage. Record again or download it from Recordings.'); }
