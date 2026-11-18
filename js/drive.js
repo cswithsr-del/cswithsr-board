@@ -43,6 +43,12 @@ async function helperFetch() {
     try { const r = await fetch(url, { cache: 'no-store', redirect: 'follow', signal: tmo(60000) }); return { status: r.status, txt: await r.text() }; }
     catch (e) { last = e; await new Promise(ok => setTimeout(ok, 1500)); }
   }
+  if (!/\/exec(\?|$)/.test(cfg.helper)) throw new Error('The helper link must end in /exec (this one does not). In the script: Deploy, Manage deployments, copy the Web app URL ending in /exec, paste it in Settings and tap Test.');
+  if (last && last.name !== 'TimeoutError' && navigator.onLine) {
+    // the helper answered, but the browser blocked it: Google sent its sign-in page instead of the key
+    let answers = false; try { await fetch(cfg.helper, { mode: 'no-cors', cache: 'no-store', signal: tmo(30000) }); answers = true; } catch (e) {}
+    if (answers) throw new Error('The helper link answers, but Google asks for a sign-in instead of giving a key. In the script: Deploy, Manage deployments, ✏️ Edit, set Execute as "Me" and Who has access "Anyone" (not "Anyone with Google account"), Version: New version, Deploy. Then Test again.');
+  }
   throw new Error('Drive helper not reachable (' + (last && last.name === 'TimeoutError' ? 'no answer in 60 s' : 'no internet, or the helper link is wrong') + '). Trying again automatically.');
 }
 async function helperToken() {
