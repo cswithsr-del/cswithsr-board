@@ -805,6 +805,8 @@ async function openSettings() {
     const txt = drive.helperScript(k);
     try { await navigator.clipboard.writeText(txt); toast('Helper script copied'); } catch (e) { const ta = document.createElement('textarea'); ta.value = txt; ta.className = 'copybox'; q('#hCopy').after(ta); ta.select(); toast('Select all and copy the text that appeared'); }
   };
+  if (!q('#hMan')) { const b = document.createElement('button'); b.id = 'hMan'; b.className = 'ghost'; b.textContent = 'Copy manifest'; b.style.marginLeft = '8px'; q('#hCopy').after(b);
+    b.onclick = async () => { const txt = drive.helperManifest(); try { await navigator.clipboard.writeText(txt); toast('Manifest copied: paste it into appsscript.json'); } catch (e) { const ta = document.createElement('textarea'); ta.value = txt; ta.className = 'copybox'; b.after(ta); ta.select(); toast('Select all and copy the text that appeared'); } }; }
   q('#hTest').onclick = async () => {
     const u = q('#hUrl').value.trim(); if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(u)) { q('#hStat').textContent = 'Paste the Web app URL that starts with https://script.google.com/'; return; }
     await drive.saveSettings({ helper: u }); q('#hStat').textContent = 'Testing…';

@@ -90,9 +90,19 @@ export async function testHelper() {
       e.link = 'https://console.developers.google.com/apis/api/drive.googleapis.com/overview' + (m ? '?project=' + m[1] : ''); throw e; }
     throw new Error('The helper works but has no Drive permission (' + r.status + (reason ? ' ' + reason : '') + '). Key permissions: ' + (scopes || 'unknown') + '. Fix: open myaccount.google.com/connections, remove the helper script, then in the script editor pick "authorize", tap Run, and on Google\'s screen tick "Select all" before Continue. Then Deploy, Manage deployments, Edit, New version, Deploy, and Test again.');
   }
+  // reading Drive is not enough: uploads need the full Drive permission
+  try {
+    const ti = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), { signal: tmo(15000) });
+    if (ti.ok) { const sc = ((await ti.json()).scope || '').split(/\s+/);
+      if (!sc.some(x => /\/auth\/drive$/.test(x))) { token = null; tokenExp = 0;
+        throw new Error('The helper key can only READ Drive, not add files (it has: ' + sc.map(x => x.replace(/.*\/auth\//, '')).join(', ') + '). Fix in the script editor: ⚙ Project Settings, tick "Show appsscript.json manifest file in editor". Open appsscript.json and paste the manifest from Settings (button "Copy manifest") over everything in it, save. Then Run authorize, allow all, Deploy, Manage deployments, Edit, New version, Deploy, and Test again.'); } }
+  } catch (e) { if (/only READ/.test(e.message)) throw e; }
   await store.put('kv', 'helperOk', Date.now());
   return cfg.email;
 }
+export const helperManifest = () => JSON.stringify({ timeZone: 'Asia/Karachi', exceptionLogging: 'STACKDRIVER', runtimeVersion: 'V8',
+  oauthScopes: ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/userinfo.email'],
+  webapp: { executeAs: 'USER_DEPLOYING', access: 'ANYONE_ANONYMOUS' } }, null, 2);
 export function newKey() { const a = new Uint8Array(24); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 export const helperScript = key => `// CSwithSR Board: Drive helper. Keep this key secret.
 const KEY = '${key}';
