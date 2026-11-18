@@ -198,14 +198,19 @@ async function call(url, init = {}) {
 async function why(r, what) {
   let msg = '', reason = '';
   try { const j = await r.json(); msg = j.error && j.error.message || ''; reason = (j.error && j.error.errors && j.error.errors[0] && j.error.errors[0].reason) || (j.error && j.error.status) || ''; } catch (e) {}
-  if (r.status === 403 && /insufficient|scope|PERMISSION_DENIED/i.test(reason + msg) && !/has not been used|disabled/i.test(msg)) { token = null; tokenExp = 0;
-    if (cfg.helper) { setState({ msg: 'The Drive helper has no Drive permission' }); throw new Error('The Drive helper has no Drive permission. Open your script, Run authorize, tick “Select all”, then tap Test in Settings and Retry here.'); }
-    setState({ needsSignIn: true, msg: 'Drive permission missing. Tap Connect Drive and tick the Drive box.' }); const e = new Error('Drive permission missing: tap Connect Drive and tick the Drive box, then Retry.'); throw e; }
-  if (/has not been used|is disabled|accessNotConfigured|SERVICE_DISABLED/i.test(msg + reason)) throw new Error('The Google Drive API is not switched on in your Google Cloud project. Enable it, wait 2 minutes, then Retry.');
-  throw new Error(`${what} (${r.status}${msg ? ': ' + msg.slice(0, 140) : ''})`);
+  const detail = ` [${r.status}${reason ? ' ' + reason : ''}${msg ? ': ' + msg.slice(0, 160) : ''}]`;
+  // the key itself lacks Drive access (only this case needs authorize again)
+  if (r.status === 403 && /insufficientPermissions|SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(reason + msg)) { token = null; tokenExp = 0;
+    if (cfg.helper) { setState({ msg: 'The Drive helper key has no Drive access' }); throw new Error('The Drive helper key has no Drive access. Run authorize in the script, allow everything, Deploy a new version, tap Test, then Retry.' + detail); }
+    setState({ needsSignIn: true, msg: 'Drive permission missing. Tap Connect Drive and tick the Drive box.' }); throw new Error('Drive permission missing: tap Connect Drive and tick the Drive box, then Retry.' + detail); }
+  if (/has not been used|is disabled|accessNotConfigured|SERVICE_DISABLED/i.test(msg + reason)) throw new Error('The Google Drive API is not switched on in your Google Cloud project. Enable it, wait 2 minutes, then Retry.' + detail);
+  // a remembered folder this account cannot use (deleted, or made by another account): forget it and try again
+  if ((r.status === 403 || r.status === 404) && /insufficientFilePermissions|notFound|forbidden|PERMISSION_DENIED|File not found/i.test(reason + msg)) { const e = new Error('Drive folder not usable, finding it again' + detail); e.folder = true; throw e; }
+  throw new Error(what + detail);
 }
+const fkey = () => 'dfolders' + (cfg.helper ? ':h:' + (cfg.email || '') : '');
 async function folderFor(path) {
-  const cache = (await store.get('kv', 'dfolders' + (cfg.helper ? ':h' : ''))) || {};
+  const cache = (await store.get('kv', fkey())) || {};
   let parent = 'root', key = '';
   for (const name of path) {
     key += '/' + name;
@@ -220,7 +225,7 @@ async function folderFor(path) {
       if (!c.ok) await why(c, 'Could not create Drive folder');
       id = (await c.json()).id;
     }
-    cache[key] = parent = id; await store.put('kv', 'dfolders' + (cfg.helper ? ':h' : ''), cache);
+    cache[key] = parent = id; await store.put('kv', fkey(), cache);
   }
   return parent;
 }
@@ -238,10 +243,18 @@ async function upload(j) {
   }
   if (!j.session && j.lec && !j.lec.done) { await nameLecture(j); await saveJob(j); emit(); setState({ msg: 'Uploading ' + j.name }); }
   if (!j.session) {
-    const parent = j.parentId || await folderFor([cfg.root || 'CSwithSR Classes', ...j.path]);
-    const r = await call('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
+    const create = async parent => call('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
       method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': j.mime, 'X-Upload-Content-Length': String(total) },
       body: JSON.stringify({ name: j.name, parents: [parent], mimeType: j.mime, ...(j.lec && j.lec.done ? { appProperties: { lec: String(j.lec.n), lecPart: String(j.lec.part || ''), lecDate: j.lec.date } } : {}) }) });
+    const path = [cfg.root || 'CSwithSR Classes', ...j.path];
+    let parent;
+    try { parent = j.parentId || await folderFor(path); }
+    catch (e) { if (!e.folder || j.parentId) throw e; await store.del('kv', fkey()); parent = await folderFor(path); }
+    let r = await create(parent);
+    if (!r.ok) { try { await why(r.clone(), 'Drive refused the upload'); } catch (e) {
+      if (!e.folder) throw e;
+      if (j.parentId) throw new Error('The folder picked for this file cannot be used by the Drive helper account. Pick the folder again, or delete the folder choice.' + e.message.slice(e.message.indexOf(' [')));
+      await store.del('kv', fkey()); r = await create(await folderFor(path)); } }
     if (!r.ok) await why(r, 'Drive refused the upload');
     j.session = r.headers.get('Location'); j.offset = 0; if (!j.session) throw new Error('Drive did not return an upload address.');
     await saveJob(j);
