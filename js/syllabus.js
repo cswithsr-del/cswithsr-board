@@ -61,3 +61,12 @@ LEVELS[0].name = 'O Level · Online';
 LEVELS.splice(1, 0, { ...LEVELS[0], id: 'olg', name: 'O Level · GreenHall', base: 'ol' });
 export const baseOf = lv => (LEVELS.find(l => l.id === lv) || {}).base || lv;
 export const sibling = lv => lv === 'ol' ? 'olg' : lv === 'olg' ? 'ol' : null;
+
+// Recorded Lectures: a separate, empty copy of the same chapters for premium recorded lessons.
+// Own ids, so notes, names, order, Trash, added topics, recordings and Drive folders never mix with live classes.
+const REC = [['ol', 'rol', 'O Level / IGCSE'], ['as', 'ras', 'AS Level'], ['a2', 'ra2', 'A2 Level']];
+for (const [src, id, tab] of REC) {
+  const L = LEVELS.find(l => l.id === src);
+  LEVELS.push({ ...L, id, rec: true, tab, name: 'Recorded · ' + tab, chips: ['RECORDED LECTURES', ...L.chips] });
+}
+export const isRec = lv => !!(LEVELS.find(l => l.id === lv) || {}).rec;

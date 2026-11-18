@@ -3,7 +3,7 @@ import * as board from './board.js';
 import * as bg from './bg.js';
 import * as cam from './cam.js';
 import * as rec from './rec.js';
-import { LEVELS, topicId, chLabel, inChapter, baseOf, sibling } from './syllabus.js';
+import { LEVELS, topicId, chLabel, inChapter, baseOf, sibling, isRec } from './syllabus.js';
 import * as drive from './drive.js';
 import * as ide from './ide.js';
 import { notesPdf } from './export.js';
@@ -84,7 +84,7 @@ function setHeader(title, chips) {
   $('#title').textContent = title;
   const el = $('#chips'); el.innerHTML = ''; (chips || []).forEach(c => { const s = document.createElement('span'); s.textContent = c; el.appendChild(s); });
 }
-const hasCode = t => t && !t.codeLab && (t.paper === 'p2' || t.paper === 'p4');
+const hasCode = t => t && !t.codeLab && !isRec(t.level) && (t.paper === 'p2' || t.paper === 'p4');
 const shortName = t => t.name.replace(/^\d+(\.\d+)?\s+/, '');
 async function openCodeLab(lv) {
   await board.flush();
@@ -186,15 +186,20 @@ async function renderLib() {
   if (libView === 'recs') { tabs.hidden = true; $('#libsub').textContent = 'Every class you recorded, newest first'; return renderRecs(body, recs); }
   tabs.hidden = false; $('#libsub').textContent = 'Pick a topic to open its notes';
   tabs.innerHTML = '';
-  LEVELS.forEach(lv => { const b = document.createElement('button'); b.role = 'tab'; b.textContent = lv.name; b.setAttribute('aria-selected', cfg.level === lv.id); b.onclick = () => { cfg.level = lv.id; saveCfg(); renderLib(); }; tabs.appendChild(b); });
+  const mod = cfg.module === 'rec' ? 'rec' : 'live', inMod = l => !!l.rec === (mod === 'rec');
+  if (!LEVELS.find(l => l.id === cfg.level && inMod(l))) cfg.level = LEVELS.find(inMod).id;
+  const sw = document.createElement('div'); sw.className = 'modsw'; sw.style.cssText = 'display:flex;gap:8px;margin:0 0 10px';
+  [['live', 'Live classes'], ['rec', 'Recorded lectures']].forEach(([k, t]) => { const b = document.createElement('button'); b.className = mod === k ? 'primary' : 'ghost'; b.textContent = t; b.onclick = () => { cfg.module = k; saveCfg(); renderLib(); }; sw.appendChild(b); });
+  tabs.appendChild(sw);
+  LEVELS.filter(inMod).forEach(lv => { const b = document.createElement('button'); b.role = 'tab'; b.textContent = lv.tab || lv.name; b.setAttribute('aria-selected', cfg.level === lv.id); b.onclick = () => { cfg.level = lv.id; saveCfg(); renderLib(); }; tabs.appendChild(b); });
   const q = $('#search').value.trim().toLowerCase();
   const custom = await customTopics(); await loadNames();
   $('#editBtn').classList.toggle('primary', libEdit); $('#editBtn').textContent = libEdit ? 'Done editing' : 'Edit';
   $('#trashBtn').textContent = 'Trash' + (NAMES.trash.length ? ` (${NAMES.trash.length})` : '');
   if (libView === 'trash') { tabs.hidden = true; $('#libsub').textContent = 'Deleted chapters and subtopics. Restore puts them back where they were.'; return renderTrash(body); }
   if (libEdit) { const tip = document.createElement('p'); tip.className = 'help'; tip.textContent = 'Drag ⠿ to change the order. Rename or delete chapters and subtopics; deleted ones go to Trash.'; body.appendChild(tip); }
-  const levels = q ? LEVELS : LEVELS.filter(l => l.id === cfg.level);
-  if (!q && !libEdit) {
+  const levels = q ? LEVELS.filter(inMod) : LEVELS.filter(l => l.id === cfg.level);
+  if (!q && !libEdit && mod === 'live') {
     const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + lv.id + ':')).length;
     const cl = document.createElement('button'); cl.className = 'codecard';
     cl.innerHTML = `<span class="cic"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/></svg></span><span><small>CODE LAB · ${esc(lv.id === 'ol' ? 'O LEVEL · ONLINE' : lv.name.toUpperCase())}</small><strong>${lv.id === 'a2' ? 'Python' : 'Pseudocode and Python'}</strong><em>Write, run and annotate programs. Text files included.</em></span><span class="meta">${progs ? progs + (progs === 1 ? ' program' : ' programs') : 'Open'}</span>`;
@@ -868,11 +873,11 @@ document.addEventListener('keydown', e => {
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const dayOf = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 // Drive layout: CSwithSR Classes › O Level / AS Level / A2 Level › Paper › Chapter › Subtopic › Notes or Recordings
-const LEVEL_FOLDER = { ol: 'O Level', olg: 'O Level', as: 'AS Level', a2: 'A2 Level' };
+const LEVEL_FOLDER = { ol: 'O Level', olg: 'O Level', as: 'AS Level', a2: 'A2 Level', rol: 'Recorded Lectures - O Level', ras: 'Recorded Lectures - AS Level', ra2: 'Recorded Lectures - A2 Level' };
 function levelFolder(t) { return LEVEL_FOLDER[t.level] || 'Other'; }
 function paperFolder(t) { const lv = LEVELS.find(l => l.id === t.level), p = lv && lv.papers.find(x => x.id === t.paper); return p ? p.name.replace(' · ', ' - ') : 'Other'; }
 // Lecture names: "OL-IGCSE Chap 7,8 Lecture 6.mp4". The number is worked out from Drive when the file is sent.
-const LEC_PREFIX = { ol: 'OL-IGCSE', olg: 'OL-IGCSE GreenHall', as: 'AS', a2: 'A2' };
+const LEC_PREFIX = { ol: 'OL-IGCSE', olg: 'OL-IGCSE GreenHall', as: 'AS', a2: 'A2', rol: 'REC OL-IGCSE', ras: 'REC AS', ra2: 'REC A2' };
 const lecPrefix = lv => ((cfg.lecPrefix || {})[lv] || LEC_PREFIX[lv] || '').trim();
 function chapNums(t) {
   const m = String(t.chapterLabel || '').match(/^(\d+)\s*[–-]\s*(\d+)$/);
@@ -884,7 +889,7 @@ function lecInfo(t, kind, date, ext) {
   return { prefix: lecPrefix(t.level), chap: chapNums(t), kind, date, ext };
 }
 const lecTemp = l => `${l.prefix} Chap ${l.chap} Lecture … ${l.kind === 'notes' ? 'Notes ' : ''}(number given when sent).${l.ext}`;
-const batchTag = t => t.level === 'olg' ? 'GreenHall' : t.level === 'ol' ? 'Online' : '';
+const batchTag = t => isRec(t.level) ? 'Recorded' : t.level === 'olg' ? 'GreenHall' : t.level === 'ol' ? 'Online' : '';
 function drivePath(t, kind = 'notes') {
   const leaf = kind === 'rec' ? 'Recordings' : 'Notes';
   if (t.codeLab) return t.parent ? drivePath(t.parent, kind) : [levelFolder(t), 'Code Lab', leaf];
