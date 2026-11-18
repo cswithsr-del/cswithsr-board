@@ -220,7 +220,9 @@ async function folderFor(path) {
 }
 async function upload(j) {
   const blob = await blobSource(j.src); if (!blob) throw new Error('The file is no longer on this tablet.');
-  const total = blob.size; j.total = total; j.status = 'uploading'; await saveJob(j); emit();
+  const total = blob.size;
+  if (j.src.type === 'rec' && j.fixv !== 1) { j.session = null; j.offset = 0; j.fixv = 1; }   // recordings are now rebuilt before upload (new size): start their upload fresh
+  j.total = total; j.status = 'uploading'; await saveJob(j); emit();
   setState({ msg: 'Uploading ' + j.name });
   if (j.session) {   // ask Drive how much it already has
     const r = await call(j.session, { method: 'PUT', headers: { 'Content-Range': 'bytes */' + total } });
