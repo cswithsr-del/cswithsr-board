@@ -84,7 +84,7 @@ function setHeader(title, chips) {
   $('#title').textContent = title;
   const el = $('#chips'); el.innerHTML = ''; (chips || []).forEach(c => { const s = document.createElement('span'); s.textContent = c; el.appendChild(s); });
 }
-const hasCode = t => t && !t.codeLab && !isRec(t.level) && (t.paper === 'p2' || t.paper === 'p4');
+const hasCode = t => t && !t.codeLab && (t.paper === 'p2' || t.paper === 'p4');
 const shortName = t => t.name.replace(/^\d+(\.\d+)?\s+/, '');
 async function openCodeLab(lv) {
   await board.flush();
@@ -199,7 +199,7 @@ async function renderLib() {
   if (libView === 'trash') { tabs.hidden = true; $('#libsub').textContent = 'Deleted chapters and subtopics. Restore puts them back where they were.'; return renderTrash(body); }
   if (libEdit) { const tip = document.createElement('p'); tip.className = 'help'; tip.textContent = 'Drag ⠿ to change the order. Rename or delete chapters and subtopics; deleted ones go to Trash.'; body.appendChild(tip); }
   const levels = q ? LEVELS.filter(inMod) : LEVELS.filter(l => l.id === cfg.level);
-  if (!q && !libEdit && mod === 'live') {
+  if (!q && !libEdit) {
     const lv = LEVELS.find(l => l.id === cfg.level), progs = (await store.getPrefix('kv', 'cp:' + lv.id + ':')).length;
     const cl = document.createElement('button'); cl.className = 'codecard';
     cl.innerHTML = `<span class="cic"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/></svg></span><span><small>CODE LAB · ${esc(lv.id === 'ol' ? 'O LEVEL · ONLINE' : lv.name.toUpperCase())}</small><strong>${lv.id === 'a2' ? 'Python' : 'Pseudocode and Python'}</strong><em>Write, run and annotate programs. Text files included.</em></span><span class="meta">${progs ? progs + (progs === 1 ? ' program' : ' programs') : 'Open'}</span>`;

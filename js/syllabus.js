@@ -67,6 +67,6 @@ export const sibling = lv => lv === 'ol' ? 'olg' : lv === 'olg' ? 'ol' : null;
 const REC = [['ol', 'rol', 'O Level / IGCSE'], ['as', 'ras', 'AS Level'], ['a2', 'ra2', 'A2 Level']];
 for (const [src, id, tab] of REC) {
   const L = LEVELS.find(l => l.id === src);
-  LEVELS.push({ ...L, id, rec: true, tab, name: 'Recorded · ' + tab, chips: ['RECORDED LECTURES', ...L.chips] });
+  LEVELS.push({ ...L, id, base: src, rec: true, tab, name: 'Recorded · ' + tab, chips: ['RECORDED LECTURES', ...L.chips] });
 }
 export const isRec = lv => !!(LEVELS.find(l => l.id === lv) || {}).rec;
